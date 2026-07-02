@@ -4,12 +4,14 @@ import { CONFIG } from '../config';
 import type { AreaSpec, PoiSpec, HeightSampler } from '../types';
 import { pointInPolygon, polygonAreaAbs, ringBBox, seededRandom, hashStr } from './geomUtils';
 import { getMaterials } from './materials';
+import { FootprintGrid } from './collision';
 
 /** Green/water/parking area polygons draped onto the terrain + instanced trees. */
 export function buildAreas(
   areas: AreaSpec[],
   treePois: PoiSpec[],
   sample: HeightSampler,
+  footprints?: FootprintGrid,
 ): { areas: THREE.Object3D | null; trees: THREE.Object3D | null } {
   const geoBuckets: Record<string, THREE.BufferGeometry[]> = {
     grass: [], forest: [], sand: [], parking: [], water: [],
@@ -36,6 +38,7 @@ export function buildAreas(
           const x = bb.minX + rng() * (bb.maxX - bb.minX);
           const z = bb.minZ + rng() * (bb.maxZ - bb.minZ);
           if (!pointInPolygon(x, z, a.outer, a.holes)) continue;
+          if (footprints?.inside(x, z)) continue; // engine rule: no trees inside buildings
           treeSpots.push({ x, z, s: 0.7 + rng() * 0.8 });
           placed++;
         }
@@ -43,7 +46,8 @@ export function buildAreas(
     }
   }
   for (const t of treePois) {
-    if (t.kind === 'tree') treeSpots.push({ x: t.x, z: t.z, s: 0.9 + (hashStr(t.id) % 100) / 160 });
+    if (t.kind !== 'tree' || footprints?.inside(t.x, t.z)) continue;
+    treeSpots.push({ x: t.x, z: t.z, s: 0.9 + (hashStr(t.id) % 100) / 160 });
   }
 
   const mats = getMaterials();

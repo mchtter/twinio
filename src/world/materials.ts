@@ -21,19 +21,28 @@ function noise(ctx: CanvasRenderingContext2D, s: number, alpha: number, light: n
   }
 }
 
+/** Urban ground: neutral soil/concrete blotches — green comes from OSM area polygons. */
 export function makeGroundTexture(): THREE.CanvasTexture {
   return canvas(256, (ctx, s) => {
-    ctx.fillStyle = '#b9bdb0';
+    ctx.fillStyle = '#b1ada4';
     ctx.fillRect(0, 0, s, s);
-    for (let i = 0; i < 400; i++) {
-      const g = 165 + Math.random() * 45;
-      ctx.fillStyle = `rgba(${g - 20},${g},${g - 45},0.5)`;
-      const r = 2 + Math.random() * 8;
+    for (let i = 0; i < 380; i++) {
+      const g = 150 + Math.random() * 45;
+      ctx.fillStyle = `rgba(${g + 6},${g},${g - 12},0.45)`;
+      const r = 2 + Math.random() * 9;
       ctx.beginPath();
       ctx.arc(Math.random() * s, Math.random() * s, r, 0, 7);
       ctx.fill();
     }
-    noise(ctx, s, 0.1, 120);
+    // sparse dry-grass hints so it doesn't read as pure concrete
+    for (let i = 0; i < 60; i++) {
+      const g = 140 + Math.random() * 30;
+      ctx.fillStyle = `rgba(${g - 15},${g},${g - 45},0.25)`;
+      ctx.beginPath();
+      ctx.arc(Math.random() * s, Math.random() * s, 3 + Math.random() * 10, 0, 7);
+      ctx.fill();
+    }
+    noise(ctx, s, 0.1, 118);
   });
 }
 

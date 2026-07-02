@@ -1,4 +1,46 @@
-import type { BuildingSpec } from '../types';
+import type { BuildingSpec, V2 } from '../types';
+import { pointInPolygon, ringBBox } from './geomUtils';
+
+/** Per-tile point-in-building-footprint queries (grid hash).
+ * Used as an engine rule source: sidewalks, lamps and trees are not generated
+ * inside building footprints — hides most broken/offset-data artifacts. */
+export class FootprintGrid {
+  private static CELL = 16;
+  private cells = new Map<string, { outer: V2[]; holes: V2[][] }[]>();
+
+  constructor(buildings: BuildingSpec[]) {
+    for (const b of buildings) {
+      if (b.outer.length < 3) continue;
+      const bb = ringBBox(b.outer);
+      const poly = { outer: b.outer, holes: b.holes };
+      const minX = Math.floor(bb.minX / FootprintGrid.CELL);
+      const maxX = Math.floor(bb.maxX / FootprintGrid.CELL);
+      const minZ = Math.floor(bb.minZ / FootprintGrid.CELL);
+      const maxZ = Math.floor(bb.maxZ / FootprintGrid.CELL);
+      for (let cx = minX; cx <= maxX; cx++) {
+        for (let cz = minZ; cz <= maxZ; cz++) {
+          const key = `${cx},${cz}`;
+          let arr = this.cells.get(key);
+          if (!arr) {
+            arr = [];
+            this.cells.set(key, arr);
+          }
+          arr.push(poly);
+        }
+      }
+    }
+  }
+
+  inside(x: number, z: number): boolean {
+    const key = `${Math.floor(x / FootprintGrid.CELL)},${Math.floor(z / FootprintGrid.CELL)}`;
+    const polys = this.cells.get(key);
+    if (!polys) return false;
+    for (const p of polys) {
+      if (pointInPolygon(x, z, p.outer, p.holes)) return true;
+    }
+    return false;
+  }
+}
 
 interface Edge {
   ax: number;

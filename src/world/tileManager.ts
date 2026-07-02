@@ -9,7 +9,7 @@ import { buildAreas } from './greenery';
 import { buildProps, TrafficSignalSet } from './props';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
-import { CollisionIndex } from './collision';
+import { CollisionIndex, FootprintGrid } from './collision';
 
 type TileMode = 'full' | 'light';
 
@@ -144,25 +144,28 @@ export class World {
       const areaSpecs = light ? parsed.areas.map((a) => ({ ...a, treeDensity: 0 })) : parsed.areas;
       const poiSpecs = light ? [] : parsed.pois;
 
+      // engine rule source: nothing walks/spawns/grows inside building footprints
+      const footprints = new FootprintGrid(parsed.buildings);
+
       // build in slices with frame yields to avoid long main-thread stalls
       const buildings = buildBuildings(parsed.buildings, sample);
       if (buildings) group.add(buildings);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const roads = buildRoads(roadSpecs, poiSpecs, sample);
+      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints);
       if (roads.group) group.add(roads.group);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const areas = buildAreas(areaSpecs, poiSpecs, sample);
+      const areas = buildAreas(areaSpecs, poiSpecs, sample, footprints);
       if (areas.areas) group.add(areas.areas);
       if (areas.trees) group.add(areas.trees);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
       if (!light) {
-        const props = buildProps(parsed.roads, parsed.pois, sample);
+        const props = buildProps(parsed.roads, parsed.pois, sample, footprints);
         if (props.group) group.add(props.group);
         entry.signals = props.signals;
         entry.lampHeads = props.lampHeads;

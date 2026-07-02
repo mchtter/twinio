@@ -131,17 +131,18 @@ export class TerrainManager {
     geo.setIndex(idx);
     geo.computeVertexNormals();
 
-    // slope-based tinting: steep = rocky brown, flat = greenish
+    // slope-based tinting: neutral urban soil, steeper = rockier/darker.
+    // Greens come from explicit OSM polygons, not the base terrain.
     const normals = geo.getAttribute('normal');
     const col = new Float32Array(size * size * 3);
     for (let k = 0; k < size * size; k++) {
       const ny = normals.getY(k);
       const steep = Math.min(Math.max((0.995 - ny) * 30, 0), 1);
       const h = grid[k];
-      const hb = Math.min(Math.max(h / 400, 0), 1) * 0.15;
-      col[k * 3] = 0.62 + steep * 0.1 - hb;
-      col[k * 3 + 1] = 0.66 - steep * 0.12 - hb;
-      col[k * 3 + 2] = 0.52 - steep * 0.14 - hb;
+      const hb = Math.min(Math.max(h / 500, 0), 1) * 0.12;
+      col[k * 3] = 0.6 - steep * 0.06 - hb;
+      col[k * 3 + 1] = 0.58 - steep * 0.08 - hb;
+      col[k * 3 + 2] = 0.54 - steep * 0.1 - hb;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
 

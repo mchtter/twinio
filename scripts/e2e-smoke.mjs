@@ -34,7 +34,7 @@ while (Date.now() < deadline) {
 await new Promise((r) => setTimeout(r, 6000));
 
 // aerial day
-await page.evaluate(() => window.__twinio.place(0, 380, 330, -0.85, 0));
+await page.evaluate(() => window.__twinio.place(0, 620, 150, -1.2, 0));
 await new Promise((r) => setTimeout(r, 3000));
 await page.screenshot({ path: `${SHOT_DIR}/world-aerial.png` });
 
@@ -46,7 +46,7 @@ await page.screenshot({ path: `${SHOT_DIR}/world-street.png` });
 // night aerial
 await page.evaluate(() => {
   window.__twinio.setHour(22);
-  window.__twinio.place(0, 250, 220, -0.8, 0);
+  window.__twinio.place(0, 450, 150, -1.15, 0);
 });
 await new Promise((r) => setTimeout(r, 2500));
 await page.screenshot({ path: `${SHOT_DIR}/world-night.png` });

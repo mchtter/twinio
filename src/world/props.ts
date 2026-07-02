@@ -4,6 +4,7 @@ import { CONFIG } from '../config';
 import type { RoadSpec, PoiSpec, HeightSampler } from '../types';
 import { getMaterials } from './materials';
 import { hashStr } from './geomUtils';
+import { FootprintGrid } from './collision';
 
 let lampPoleGeo: THREE.BufferGeometry | undefined;
 let lampHeadGeo: THREE.BufferGeometry | undefined;
@@ -75,7 +76,12 @@ export class TrafficSignalSet {
   }
 }
 
-export function buildProps(roads: RoadSpec[], pois: PoiSpec[], sample: HeightSampler): PropsResult {
+export function buildProps(
+  roads: RoadSpec[],
+  pois: PoiSpec[],
+  sample: HeightSampler,
+  footprints?: FootprintGrid,
+): PropsResult {
   const mats = getMaterials();
   const group = new THREE.Group();
   group.userData.cat = 'props';
@@ -87,6 +93,7 @@ export function buildProps(roads: RoadSpec[], pois: PoiSpec[], sample: HeightSam
   const gridKey = (x: number, z: number) => `${Math.round(x / 9)},${Math.round(z / 9)}`;
 
   const addLamp = (x: number, z: number, rot: number) => {
+    if (footprints?.inside(x, z)) return; // engine rule: never inside a building
     const k = gridKey(x, z);
     if (occupied.has(k)) return;
     occupied.add(k);

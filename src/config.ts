@@ -1,7 +1,7 @@
 /** Global tunables for the engine. All distances in meters. */
 export const CONFIG = {
-  // Default start location (Kadıköy, İstanbul) — overridable via ?lat=..&lon=..
-  origin: { lat: 40.9887, lon: 29.0253 },
+  // Default start location (Antalya) — overridable via ?lat=..&lon=..
+  origin: { lat: 36.902781, lon: 30.643523 },
 
   // OSM data tiles (slippy tile scheme)
   dataZoom: 15,
@@ -28,8 +28,12 @@ export const CONFIG = {
   yPath: 0.12,
   yRoadMinor: 0.16,
   yRoadMajor: 0.2,
-  ySidewalk: 0.24,
-  yCrosswalk: 0.26,
+  ySidewalk: 0.26,
+  yCrosswalk: 0.28,
+  // per-road deterministic jitter added on top (kills same-class overlap z-fighting)
+  yRoadJitter: 0.035,
+  // roads are subdivided to this max segment length so they drape the terrain
+  roadSubdivision: 9,
 
   // Agents
   maxVehicles: 140,

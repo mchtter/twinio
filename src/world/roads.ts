@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config';
 import type { RoadSpec, PoiSpec, HeightSampler, V2 } from '../types';
-import { offsetPolyline } from './geomUtils';
+import { offsetPolyline, subdividePolyline, hashStr } from './geomUtils';
 import { getMaterials } from './materials';
+import { FootprintGrid } from './collision';
 
 interface Bucket {
   pos: number[];
@@ -23,8 +24,17 @@ export interface RoadBuildResult {
   walkable: THREE.Vector3[][];
 }
 
-/** Builds road ribbons (with lane markings), sidewalks and zebra crossings. */
-export function buildRoads(roads: RoadSpec[], crossings: PoiSpec[], sample: HeightSampler): RoadBuildResult {
+/** Builds road ribbons (with lane markings), sidewalks and zebra crossings.
+ * Engine rules against broken/overlapping data:
+ * - polylines are subdivided (~9 m) and draped vertex-by-vertex on the terrain
+ * - every road gets a deterministic micro-offset in y → no same-class z-fighting
+ * - sidewalk segments falling inside building footprints are skipped */
+export function buildRoads(
+  roads: RoadSpec[],
+  crossings: PoiSpec[],
+  sample: HeightSampler,
+  footprints?: FootprintGrid,
+): RoadBuildResult {
   const buckets = {
     major: newBucket(),
     minor: newBucket(),
@@ -37,22 +47,26 @@ export function buildRoads(roads: RoadSpec[], crossings: PoiSpec[], sample: Heig
 
   for (const r of roads) {
     if (r.pts.length < 2) continue;
-    const yOff = r.cls === 'major' ? CONFIG.yRoadMajor : r.cls === 'minor' ? CONFIG.yRoadMinor : CONFIG.yPath;
-    addRibbon(buckets[r.cls], r.pts, r.width, yOff, sample, r.cls === 'major' ? 8 : 6);
+    const pts = subdividePolyline(r.pts, CONFIG.roadSubdivision);
+    const jitter = ((hashStr(r.id) % 1000) / 1000) * CONFIG.yRoadJitter;
+    const yOff =
+      (r.cls === 'major' ? CONFIG.yRoadMajor : r.cls === 'minor' ? CONFIG.yRoadMinor : CONFIG.yPath) + jitter;
+    addRibbon(buckets[r.cls], pts, r.width, yOff, sample, r.cls === 'major' ? 8 : 6);
 
     if (r.cls !== 'path') {
-      const pts3 = r.pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z));
+      const pts3 = pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z));
       if (pts3.length >= 2) drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
     } else {
-      walkable.push(r.pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z)));
+      walkable.push(pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z)));
     }
 
-    if (r.sidewalks && r.pts.length >= 2) {
+    if (r.sidewalks && pts.length >= 2) {
       for (const side of [1, -1]) {
-        const line = offsetPolyline(r.pts, side * (r.width / 2 + 1.05));
-        if (line.length < 2) continue;
-        addRibbon(buckets.sidewalk, line, 1.9, CONFIG.ySidewalk, sample, 2);
-        walkable.push(line.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
+        const line = offsetPolyline(pts, side * (r.width / 2 + 1.05));
+        for (const run of splitOutsideFootprints(line, footprints)) {
+          addRibbon(buckets.sidewalk, run, 1.9, CONFIG.ySidewalk, sample, 2);
+          walkable.push(run.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
+        }
       }
     }
   }
@@ -141,7 +155,13 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const lz = p[i].z - dx * hw * scale;
     const rx = p[i].x - dz * hw * scale;
     const rz = p[i].z + dx * hw * scale;
-    b.pos.push(lx, sample(lx, lz) + yOff, lz, rx, sample(rx, rz) + yOff, rz);
+    // drape rule: edges never drop below the centerline level → the ribbon
+    // can bank with the terrain but cannot sink under it on cross-slopes
+    const ch = sample(p[i].x, p[i].z);
+    b.pos.push(
+      lx, Math.max(sample(lx, lz), ch) + yOff, lz,
+      rx, Math.max(sample(rx, rz), ch) + yOff, rz,
+    );
     b.nor.push(0, 1, 0, 0, 1, 0);
     const v = cum / vMeters;
     b.uv.push(0, v, 1, v);
@@ -153,6 +173,23 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const ri1 = li + 3;
     b.idx.push(li, ri, li1, ri, ri1, li1);
   }
+}
+
+/** Split a polyline into runs whose vertices lie outside building footprints. */
+function splitOutsideFootprints(line: V2[], footprints?: FootprintGrid): V2[][] {
+  if (!footprints) return line.length >= 2 ? [line] : [];
+  const runs: V2[][] = [];
+  let cur: V2[] = [];
+  for (const p of line) {
+    if (footprints.inside(p.x, p.z)) {
+      if (cur.length >= 2) runs.push(cur);
+      cur = [];
+    } else {
+      cur.push(p);
+    }
+  }
+  if (cur.length >= 2) runs.push(cur);
+  return runs;
 }
 
 function nearestSegment(

@@ -84,6 +84,22 @@ export function offsetPolyline(pts: V2[], d: number): V2[] {
   return out;
 }
 
+/** Insert intermediate points so no segment exceeds maxLen (terrain draping). */
+export function subdividePolyline(pts: V2[], maxLen: number): V2[] {
+  if (pts.length < 2) return pts.slice();
+  const out: V2[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const d = Math.hypot(b.x - a.x, b.z - a.z);
+    const n = Math.max(1, Math.ceil(d / maxLen));
+    for (let k = 1; k <= n; k++) {
+      out.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n });
+    }
+  }
+  return out;
+}
+
 export function polylineLength(pts: V2[]): number {
   let l = 0;
   for (let i = 1; i < pts.length; i++) {

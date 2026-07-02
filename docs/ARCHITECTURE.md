@@ -34,6 +34,16 @@ Akış döngüsü (0.5 s'de bir): kamera karosu değiştiyse eksik karolar yükl
 - **Alanlar** (`greenery.ts`): `ShapeGeometry` araziye vertex bazında drape edilir; dünya-uzayı UV. Ağaçlar polygon içine deterministik (feature-id seed) serpilir, türe göre yoğunluk (orman > park > çim), karo başına tek `InstancedMesh`.
 - **Donatılar** (`props.ts`): OSM lamba node'ları + aydınlatılmış yollar boyunca ~27 m aralıkla prosedürel lambalar (9 m grid ile çakışma önleme). Trafik ışıkları instanced; faz döngüsü instanceColor ile sürülür.
 
+## Veri bozukluğuna karşı motor kuralları
+
+OSM/DEM verisi mükemmel değildir; görüntü bütünlüğünü motor garanti eder:
+
+1. **Yol drape**: her yol polyline'ı ~9 m'de bir alt bölümlenir ve vertex-vertex araziye oturtulur — uzun segmentlerin arazi altında kalması imkânsızlaşır. Araç grafiği de aynı alt bölümlenmiş noktaları kullanır (araçlar yokuşu takip eder).
+2. **Kenar/merkez max kuralı**: şerit kenarı, merkez hattın arazi kotunun altına inemez — yanal eğimde yol araziyle yatıklaşır ama gömülmez.
+3. **Mikro-jitter**: her yol, id'sinden türetilen 0–3.5 cm'lik deterministik y-ofseti alır — aynı sınıftan çakışan yollarda z-fighting oluşmaz (katman sırası: alan < patika < yol < kaldırım < zebra korunur).
+4. **Taban izi (footprint) kuralı**: karo başına bina tabanları 16 m'lik grid hash'e yazılır; **bina içine düşen kaldırım segmenti, sokak lambası ve ağaç üretilmez**. Yayalar yalnız bina dışındaki kaldırım koşularında yürür.
+5. **Kentsel zemin**: arazi tabanı nötr toprak/beton tonundadır; yeşillik yalnız OSM poligonlarından gelir — şehir merkezi çim halıya dönmez.
+
 ## Ajanlar
 
 - **Yol grafı**: OSM yolları kavşaklarda bölünmüş geldiğinden her way bir kenardır; uçlar 1 m'ye yuvarlanan düğüm anahtarlarıyla bağlanır. Karo yüklendikçe/boşaldıkça kenarlar eklenir/silinir.
