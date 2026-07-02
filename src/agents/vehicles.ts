@@ -1,0 +1,142 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { CONFIG } from '../config';
+import { getMaterials } from '../world/materials';
+import { RoadGraph, GraphEdge } from './graph';
+
+const CAR_COLORS = [
+  0xdedede, 0xb8bcc2, 0x2e3338, 0x8a1f24, 0x1f3f6e, 0x3d5a3f, 0xc7b299, 0x74797f, 0xe8e6e0, 0x50261f,
+].map((c) => new THREE.Color(c));
+
+interface Car {
+  edge: GraphEdge | null;
+  d: number;
+  sign: number;
+  speed: number;
+}
+
+let carGeo: THREE.BufferGeometry | undefined;
+
+function getCarGeometry(): THREE.BufferGeometry {
+  if (carGeo) return carGeo;
+  const body = new THREE.BoxGeometry(1.75, 0.52, 4.0);
+  body.translate(0, 0.55, 0);
+  paint(body, 1, 1, 1);
+  const cabin = new THREE.BoxGeometry(1.55, 0.48, 2.0);
+  cabin.translate(0, 1.03, -0.1);
+  paint(cabin, 0.2, 0.2, 0.22);
+  body.deleteAttribute('uv');
+  cabin.deleteAttribute('uv');
+  carGeo = mergeGeometries([body, cabin], false)!;
+  carGeo.userData.shared = true;
+  body.dispose();
+  cabin.dispose();
+  return carGeo;
+}
+
+function paint(g: THREE.BufferGeometry, r: number, gr: number, b: number): void {
+  const n = g.getAttribute('position').count;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    col[i * 3] = r;
+    col[i * 3 + 1] = gr;
+    col[i * 3 + 2] = b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+}
+
+/** Simple traffic: cars roam the drivable graph, picking random turns at nodes. */
+export class VehicleSystem {
+  mesh: THREE.InstancedMesh;
+  private cars: Car[] = [];
+  private tmpPos = new THREE.Vector3();
+  private tmpDir = new THREE.Vector3();
+  private tmpM = new THREE.Matrix4();
+  private tmpQ = new THREE.Quaternion();
+  private one = new THREE.Vector3(1, 1, 1);
+  private zero = new THREE.Vector3(0, 0, 0);
+  private fwd = new THREE.Vector3(0, 0, 1);
+
+  constructor(scene: THREE.Scene) {
+    this.mesh = new THREE.InstancedMesh(getCarGeometry(), getMaterials().vehicle, CONFIG.maxVehicles);
+    this.mesh.castShadow = true;
+    this.mesh.frustumCulled = false;
+    this.mesh.count = CONFIG.maxVehicles;
+    const c = new THREE.Color();
+    for (let i = 0; i < CONFIG.maxVehicles; i++) {
+      this.cars.push({ edge: null, d: 0, sign: 1, speed: 10 });
+      this.mesh.setColorAt(i, c.copy(CAR_COLORS[i % CAR_COLORS.length]));
+      this.tmpM.compose(this.zero, this.tmpQ.identity(), this.zero);
+      this.mesh.setMatrixAt(i, this.tmpM);
+    }
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    scene.add(this.mesh);
+  }
+
+  reset(): void {
+    for (const c of this.cars) c.edge = null;
+  }
+
+  update(dt: number, camPos: THREE.Vector3, graph: RoadGraph): void {
+    const target = Math.min(CONFIG.maxVehicles, Math.floor(graph.totalLength / 90));
+    let activeCount = 0;
+
+    for (let i = 0; i < this.cars.length; i++) {
+      const car = this.cars[i];
+
+      // despawn: edge unloaded or too far from camera
+      if (car.edge && !graph.edges.has(car.edge.id)) car.edge = null;
+      if (car.edge) {
+        graph.posAt(car.edge, car.d, this.tmpPos);
+        if (this.tmpPos.distanceTo(camPos) > CONFIG.vehicleDespawnRadius) car.edge = null;
+      }
+
+      // spawn if below target
+      if (!car.edge && activeCount < target) {
+        const e = graph.randomEdgeNear(camPos, CONFIG.vehicleSpawnRadius, Math.random);
+        if (e) {
+          car.edge = e;
+          car.sign = e.oneway ? 1 : Math.random() < 0.5 ? 1 : -1;
+          car.d = Math.random() * e.len;
+          car.speed = e.speed * (0.75 + Math.random() * 0.4);
+        }
+      }
+
+      if (!car.edge) {
+        this.tmpM.compose(this.zero, this.tmpQ.identity(), this.zero);
+        this.mesh.setMatrixAt(i, this.tmpM);
+        continue;
+      }
+      activeCount++;
+
+      car.d += car.speed * car.sign * dt;
+      if (car.d >= car.edge.len || car.d <= 0) {
+        const node = car.sign > 0 ? car.edge.b : car.edge.a;
+        const options = graph.nextEdges(node, car.edge.id);
+        if (options.length === 0) {
+          car.edge = null;
+          continue;
+        }
+        const next = options[Math.floor(Math.random() * options.length)];
+        car.sign = next.a === node ? 1 : -1;
+        car.d = car.sign > 0 ? 0 : next.len;
+        car.edge = next;
+        car.speed = next.speed * (0.75 + Math.random() * 0.4);
+      }
+
+      graph.posAt(car.edge, car.d, this.tmpPos);
+      graph.dirAt(car.edge, car.d, car.sign, this.tmpDir);
+      // lane offset: keep right of the centerline (right = cross(dir, up) = (-dz, 0, dx))
+      const lane = 1.6;
+      this.tmpPos.x += -this.tmpDir.z * lane;
+      this.tmpPos.z += this.tmpDir.x * lane;
+      this.tmpDir.y = 0;
+      if (this.tmpDir.lengthSq() < 1e-6) this.tmpDir.set(0, 0, 1);
+      this.tmpDir.normalize();
+      this.tmpQ.setFromUnitVectors(this.fwd, this.tmpDir);
+      this.tmpM.compose(this.tmpPos, this.tmpQ, this.one);
+      this.mesh.setMatrixAt(i, this.tmpM);
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
