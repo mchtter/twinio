@@ -3,7 +3,7 @@ import { CONFIG } from '../config';
 import type { RoadSpec, PoiSpec, HeightSampler, V2 } from '../types';
 import { offsetPolyline, subdividePolyline, hashStr } from './geomUtils';
 import { getMaterials } from './materials';
-import { FootprintGrid } from './collision';
+import { FootprintGrid, RoadClearanceGrid } from './collision';
 
 interface Bucket {
   pos: number[];
@@ -28,12 +28,15 @@ export interface RoadBuildResult {
  * Engine rules against broken/overlapping data:
  * - polylines are subdivided (~9 m) and draped vertex-by-vertex on the terrain
  * - every road gets a deterministic micro-offset in y → no same-class z-fighting
- * - sidewalk segments falling inside building footprints are skipped */
+ * - sidewalk segments falling inside building footprints are skipped
+ * - sidewalk segments on ANY other road's carriageway are skipped (junction-safe)
+ * - offset fold-backs (sharp corners) are culled by direction-reversal detection */
 export function buildRoads(
   roads: RoadSpec[],
   crossings: PoiSpec[],
   sample: HeightSampler,
   footprints?: FootprintGrid,
+  clearance?: RoadClearanceGrid,
 ): RoadBuildResult {
   const buckets = {
     major: newBucket(),
@@ -64,7 +67,24 @@ export function buildRoads(
     if (r.sidewalks && pts.length >= 2) {
       for (const side of [1, -1]) {
         const line = offsetPolyline(pts, side * (r.width / 2 + 1.05));
-        for (const run of splitOutsideFootprints(line, footprints)) {
+        const bad = new Array<boolean>(line.length).fill(false);
+        // offset fold-back culling: a segment running opposite to its parent
+        // segment means the offset line self-intersected at a sharp corner
+        for (let k = 0; k + 1 < line.length; k++) {
+          const dox = line[k + 1].x - line[k].x;
+          const doz = line[k + 1].z - line[k].z;
+          const dpx = pts[k + 1].x - pts[k].x;
+          const dpz = pts[k + 1].z - pts[k].z;
+          if (dox * dpx + doz * dpz < 0) {
+            bad[k] = bad[k + 1] = true;
+          }
+        }
+        for (let k = 0; k < line.length; k++) {
+          if (bad[k]) continue;
+          if (footprints?.inside(line[k].x, line[k].z)) bad[k] = true;
+          else if (clearance?.blocked(line[k].x, line[k].z, 1.15, r.id)) bad[k] = true;
+        }
+        for (const run of splitRuns(line, bad)) {
           addRibbon(buckets.sidewalk, run, 1.9, CONFIG.ySidewalk, sample, 2);
           walkable.push(run.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
         }
@@ -243,17 +263,16 @@ function addJunctionFan(b: Bucket, cx: number, cz: number, r: number, sample: He
   }
 }
 
-/** Split a polyline into runs whose vertices lie outside building footprints. */
-function splitOutsideFootprints(line: V2[], footprints?: FootprintGrid): V2[][] {
-  if (!footprints) return line.length >= 2 ? [line] : [];
+/** Split a polyline into runs of consecutive non-flagged vertices. */
+function splitRuns(line: V2[], bad: boolean[]): V2[][] {
   const runs: V2[][] = [];
   let cur: V2[] = [];
-  for (const p of line) {
-    if (footprints.inside(p.x, p.z)) {
+  for (let i = 0; i < line.length; i++) {
+    if (bad[i]) {
       if (cur.length >= 2) runs.push(cur);
       cur = [];
     } else {
-      cur.push(p);
+      cur.push(line[i]);
     }
   }
   if (cur.length >= 2) runs.push(cur);

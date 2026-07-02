@@ -42,6 +42,67 @@ export class FootprintGrid {
   }
 }
 
+interface ClearSeg {
+  ax: number;
+  az: number;
+  bx: number;
+  bz: number;
+  hw: number; // carriageway half-width
+  id: string; // owning road id (excluded when testing its own sidewalk/lamps)
+}
+
+/** Per-tile "is this point on/near a carriageway?" queries (grid hash).
+ * Engine rule source: sidewalks and lamps must keep clear of every road's
+ * carriageway except their own — works for any junction topology. */
+export class RoadClearanceGrid {
+  private static CELL = 14;
+  private static PAD = 2.5; // max query margin supported
+  private cells = new Map<string, ClearSeg[]>();
+
+  add(id: string, pts: V2[], halfWidth: number): void {
+    for (let i = 1; i < pts.length; i++) {
+      const s: ClearSeg = { ax: pts[i - 1].x, az: pts[i - 1].z, bx: pts[i].x, bz: pts[i].z, hw: halfWidth, id };
+      const pad = halfWidth + RoadClearanceGrid.PAD;
+      const minX = Math.floor((Math.min(s.ax, s.bx) - pad) / RoadClearanceGrid.CELL);
+      const maxX = Math.floor((Math.max(s.ax, s.bx) + pad) / RoadClearanceGrid.CELL);
+      const minZ = Math.floor((Math.min(s.az, s.bz) - pad) / RoadClearanceGrid.CELL);
+      const maxZ = Math.floor((Math.max(s.az, s.bz) + pad) / RoadClearanceGrid.CELL);
+      for (let cx = minX; cx <= maxX; cx++) {
+        for (let cz = minZ; cz <= maxZ; cz++) {
+          const key = `${cx},${cz}`;
+          let arr = this.cells.get(key);
+          if (!arr) {
+            arr = [];
+            this.cells.set(key, arr);
+          }
+          arr.push(s);
+        }
+      }
+    }
+  }
+
+  /** True when (x,z) is within `margin` of any carriageway not owned by excludeId. */
+  blocked(x: number, z: number, margin: number, excludeId?: string): boolean {
+    const key = `${Math.floor(x / RoadClearanceGrid.CELL)},${Math.floor(z / RoadClearanceGrid.CELL)}`;
+    const arr = this.cells.get(key);
+    if (!arr) return false;
+    for (const s of arr) {
+      if (s.id === excludeId) continue;
+      const abx = s.bx - s.ax;
+      const abz = s.bz - s.az;
+      const l2 = abx * abx + abz * abz;
+      if (l2 < 1e-9) continue;
+      let t = ((x - s.ax) * abx + (z - s.az) * abz) / l2;
+      t = Math.min(Math.max(t, 0), 1);
+      const dx = x - (s.ax + abx * t);
+      const dz = z - (s.az + abz * t);
+      const lim = s.hw + margin;
+      if (dx * dx + dz * dz < lim * lim) return true;
+    }
+    return false;
+  }
+}
+
 interface Edge {
   ax: number;
   az: number;

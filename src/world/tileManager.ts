@@ -9,7 +9,7 @@ import { buildAreas } from './greenery';
 import { buildProps, TrafficSignalSet, SignalPoint, signalPhase } from './props';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
-import { CollisionIndex, FootprintGrid } from './collision';
+import { CollisionIndex, FootprintGrid, RoadClearanceGrid } from './collision';
 
 type TileMode = 'full' | 'light';
 
@@ -151,8 +151,13 @@ export class World {
       const areaSpecs = light ? parsed.areas.map((a) => ({ ...a, treeDensity: 0 })) : parsed.areas;
       const poiSpecs = light ? [] : parsed.pois;
 
-      // engine rule source: nothing walks/spawns/grows inside building footprints
+      // engine rule sources: nothing inside building footprints,
+      // nothing (sidewalk/lamp) on another road's carriageway
       const footprints = new FootprintGrid(parsed.buildings);
+      const clearance = new RoadClearanceGrid();
+      for (const r of parsed.roads) {
+        if (r.cls !== 'path' && r.pts.length >= 2) clearance.add(r.id, r.pts, r.width / 2);
+      }
 
       // build in slices with frame yields to avoid long main-thread stalls
       const buildings = buildBuildings(parsed.buildings, sample);
@@ -160,7 +165,7 @@ export class World {
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints);
+      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints, clearance);
       if (roads.group) group.add(roads.group);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
@@ -172,7 +177,7 @@ export class World {
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
       if (!light) {
-        const props = buildProps(parsed.roads, parsed.pois, sample, footprints);
+        const props = buildProps(parsed.roads, parsed.pois, sample, footprints, clearance);
         if (props.group) group.add(props.group);
         entry.signals = props.signals;
         entry.lampHeads = props.lampHeads;

@@ -4,7 +4,7 @@ import { CONFIG } from '../config';
 import type { RoadSpec, PoiSpec, HeightSampler } from '../types';
 import { getMaterials } from './materials';
 import { hashStr } from './geomUtils';
-import { FootprintGrid } from './collision';
+import { FootprintGrid, RoadClearanceGrid } from './collision';
 
 let lampPoleGeo: THREE.BufferGeometry | undefined;
 let lampHeadGeo: THREE.BufferGeometry | undefined;
@@ -94,6 +94,7 @@ export function buildProps(
   pois: PoiSpec[],
   sample: HeightSampler,
   footprints?: FootprintGrid,
+  clearance?: RoadClearanceGrid,
 ): PropsResult {
   const mats = getMaterials();
   const group = new THREE.Group();
@@ -105,8 +106,9 @@ export function buildProps(
   const occupied = new Set<string>();
   const gridKey = (x: number, z: number) => `${Math.round(x / 9)},${Math.round(z / 9)}`;
 
-  const addLamp = (x: number, z: number, rot: number) => {
+  const addLamp = (x: number, z: number, rot: number, ownRoadId?: string) => {
     if (footprints?.inside(x, z)) return; // engine rule: never inside a building
+    if (clearance?.blocked(x, z, 0.15, ownRoadId)) return; // never on a carriageway
     const k = gridKey(x, z);
     if (occupied.has(k)) return;
     occupied.add(k);
@@ -137,7 +139,7 @@ export function buildProps(
         const lz = pz - dx * off * side;
         // arm (+x local) must point back toward the road center:
         // rotY θ maps +x to (cosθ, 0, -sinθ)  =>  θ = atan2(-dz, dx)
-        addLamp(lx, lz, Math.atan2(-(pz - lz), px - lx));
+        addLamp(lx, lz, Math.atan2(-(pz - lz), px - lx), r.id);
         side = -side;
         next += CONFIG.lampSpacing;
       }
