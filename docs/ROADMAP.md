@@ -22,11 +22,13 @@
 - [ ] Köprü/viyadük geometrisi, tünel desteği
 - [ ] Su shader'ı (dalga/yansıma), yağmur-kar efektleri
 
-## Faz 2 — Trafik simülasyonu
+## Faz 2 — Trafik simülasyonu (başladı)
 
-- [ ] Şerit bazlı mikro-simülasyon (IDM/araç takip modeli, şerit değiştirme)
-- [ ] Araçların trafik ışıklarına ve yaya geçitlerine uyması
-- [ ] Kavşak faz planları (OSM `traffic_signals` gruplaması)
+- [x] Araçların trafik ışıklarına uyması (kırmızı/sarıda kavşak öncesi durma, ivmelenme/fren modeli)
+- [x] Basit araç takibi: aynı kenarda öndeki araca yavaşlama/durma (kuyruk oluşumu)
+- [ ] Tam IDM araç takip modeli, şerit değiştirme
+- [ ] Yaya geçitlerine uyma (geçen yayaya durma)
+- [ ] Kavşak faz planları (OSM `traffic_signals` gruplaması — karşılıklı kollar aynı fazda)
 - [ ] Yoğunluk ısı haritası katmanı, O-D matrisi ile talep üretimi
 
 ## Faz 3 — Akıllı kavşak sistemleri
