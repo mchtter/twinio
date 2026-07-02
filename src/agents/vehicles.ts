@@ -12,8 +12,12 @@ interface Car {
   edge: GraphEdge | null;
   d: number;
   sign: number;
-  speed: number;
+  speed: number; // cruise speed for the current edge
+  v: number;     // current speed (accelerates / brakes toward a target)
 }
+
+/** Distance to a blocking (non-green) signal ahead, or Infinity. */
+export type SignalQuery = (pos: THREE.Vector3, dir: THREE.Vector3) => number;
 
 let carGeo: THREE.BufferGeometry | undefined;
 
@@ -64,7 +68,7 @@ export class VehicleSystem {
     this.mesh.count = CONFIG.maxVehicles;
     const c = new THREE.Color();
     for (let i = 0; i < CONFIG.maxVehicles; i++) {
-      this.cars.push({ edge: null, d: 0, sign: 1, speed: 10 });
+      this.cars.push({ edge: null, d: 0, sign: 1, speed: 10, v: 0 });
       this.mesh.setColorAt(i, c.copy(CAR_COLORS[i % CAR_COLORS.length]));
       this.tmpM.compose(this.zero, this.tmpQ.identity(), this.zero);
       this.mesh.setMatrixAt(i, this.tmpM);
@@ -77,9 +81,21 @@ export class VehicleSystem {
     for (const c of this.cars) c.edge = null;
   }
 
-  update(dt: number, camPos: THREE.Vector3, graph: RoadGraph): void {
+  update(dt: number, camPos: THREE.Vector3, graph: RoadGraph, signalAhead?: SignalQuery): void {
     const target = Math.min(CONFIG.maxVehicles, Math.floor(graph.totalLength / 90));
     let activeCount = 0;
+
+    // per-edge occupancy for car-following (leader gap)
+    const occupancy = new Map<number, { d: number; sign: number; v: number }[]>();
+    for (const car of this.cars) {
+      if (!car.edge || !graph.edges.has(car.edge.id)) continue;
+      let arr = occupancy.get(car.edge.id);
+      if (!arr) {
+        arr = [];
+        occupancy.set(car.edge.id, arr);
+      }
+      arr.push({ d: car.d, sign: car.sign, v: car.v });
+    }
 
     for (let i = 0; i < this.cars.length; i++) {
       const car = this.cars[i];
@@ -99,6 +115,7 @@ export class VehicleSystem {
           car.sign = e.oneway ? 1 : Math.random() < 0.5 ? 1 : -1;
           car.d = Math.random() * e.len;
           car.speed = e.speed * (0.75 + Math.random() * 0.4);
+          car.v = car.speed * 0.5;
         }
       }
 
@@ -109,7 +126,36 @@ export class VehicleSystem {
       }
       activeCount++;
 
-      car.d += car.speed * car.sign * dt;
+      graph.posAt(car.edge, car.d, this.tmpPos);
+      graph.dirAt(car.edge, car.d, car.sign, this.tmpDir);
+
+      // --- desired speed: cruise, then brake for red lights and leaders ---
+      let desired = car.speed;
+      if (signalAhead) {
+        const sd = signalAhead(this.tmpPos, this.tmpDir);
+        if (sd < 5) desired = 0;
+        else if (sd < 22) desired = Math.min(desired, (sd - 5) * 0.7);
+      }
+      const others = occupancy.get(car.edge.id);
+      if (others) {
+        let gap = Infinity;
+        let leaderV = 0;
+        for (const o of others) {
+          if (o.sign !== car.sign) continue;
+          const g = car.sign > 0 ? o.d - car.d : car.d - o.d;
+          if (g > 0.01 && g < gap) {
+            gap = g;
+            leaderV = o.v;
+          }
+        }
+        if (gap < 7) desired = Math.min(desired, Math.max(leaderV - 1, 0));
+        if (gap < 5) desired = 0;
+      }
+      // accelerate 2.5 m/s², brake 7 m/s²
+      if (car.v < desired) car.v = Math.min(car.v + 2.5 * dt, desired);
+      else car.v = Math.max(car.v - 7 * dt, desired);
+
+      car.d += car.v * car.sign * dt;
       if (car.d >= car.edge.len || car.d <= 0) {
         const node = car.sign > 0 ? car.edge.b : car.edge.a;
         const options = graph.nextEdges(node, car.edge.id);

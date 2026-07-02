@@ -6,7 +6,7 @@ import { TerrainManager } from '../terrain/terrain';
 import { buildBuildings } from './buildings';
 import { buildRoads } from './roads';
 import { buildAreas } from './greenery';
-import { buildProps, TrafficSignalSet } from './props';
+import { buildProps, TrafficSignalSet, SignalPoint, signalPhase } from './props';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
 import { CollisionIndex, FootprintGrid } from './collision';
@@ -21,6 +21,7 @@ interface TileEntry {
   group: THREE.Group | null; // null while loading
   signals: TrafficSignalSet | null;
   lampHeads: THREE.Vector3[];
+  signalPoints: SignalPoint[];
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -30,6 +31,8 @@ export class World {
   private tiles = new Map<string, TileEntry>();
   private claims = new Map<string, string>();
   private hidden = new Set<string>();
+  // 24m grid hash of traffic signals for fast "red light ahead?" vehicle queries
+  private signalCells = new Map<string, SignalPoint[]>();
   private loadingCount = 0;
   generation = 0;
   onStatus?: (loading: number, total: number) => void;
@@ -116,7 +119,7 @@ export class World {
     const z = CONFIG.dataZoom;
     const key = tileKey(z, x, y);
     const gen = this.generation;
-    const entry: TileEntry = { key, x, y, mode, group: null, signals: null, lampHeads: [] };
+    const entry: TileEntry = { key, x, y, mode, group: null, signals: null, lampHeads: [], signalPoints: [] };
     this.tiles.set(key, entry);
     this.loadingCount++;
     this.emitStatus();
@@ -173,6 +176,16 @@ export class World {
         if (props.group) group.add(props.group);
         entry.signals = props.signals;
         entry.lampHeads = props.lampHeads;
+        entry.signalPoints = props.signalPoints;
+        for (const sp of props.signalPoints) {
+          const ck = this.signalCellKey(sp.x, sp.z);
+          let arr = this.signalCells.get(ck);
+          if (!arr) {
+            arr = [];
+            this.signalCells.set(ck, arr);
+          }
+          arr.push(sp);
+        }
         this.graph.addTile(key, roads.drivable);
         this.pedestrians.addTile(key, roads.walkable);
         this.collision.addTile(key, parsed.buildings);
@@ -185,6 +198,33 @@ export class World {
       this.loadingCount--;
       this.emitStatus();
     }
+  }
+
+  private signalCellKey(x: number, z: number): string {
+    return `${Math.floor(x / 24)},${Math.floor(z / 24)}`;
+  }
+
+  /** Distance to the nearest non-green signal ahead of `pos` along `dir`, or Infinity. */
+  redSignalAhead(pos: THREE.Vector3, dir: THREE.Vector3, timeSec: number): number {
+    let best = Infinity;
+    const cx = Math.floor((pos.x + dir.x * 12) / 24);
+    const cz = Math.floor((pos.z + dir.z * 12) / 24);
+    for (let dxc = -1; dxc <= 1; dxc++) {
+      for (let dzc = -1; dzc <= 1; dzc++) {
+        const arr = this.signalCells.get(`${cx + dxc},${cz + dzc}`);
+        if (!arr) continue;
+        for (const s of arr) {
+          const vx = s.x - pos.x;
+          const vz = s.z - pos.z;
+          const d = Math.hypot(vx, vz);
+          if (d < 1.5 || d > 24 || d >= best) continue;
+          if ((vx * dir.x + vz * dir.z) / d < 0.6) continue; // not ahead
+          if (signalPhase(timeSec, s.offset) === 0) continue; // green
+          best = d;
+        }
+      }
+    }
+    return best;
   }
 
   private unloadTile(key: string): void {
@@ -200,6 +240,15 @@ export class World {
     }
     for (const [id, owner] of this.claims) {
       if (owner === key) this.claims.delete(id);
+    }
+    for (const sp of t.signalPoints) {
+      const ck = this.signalCellKey(sp.x, sp.z);
+      const arr = this.signalCells.get(ck);
+      if (arr) {
+        const i = arr.indexOf(sp);
+        if (i >= 0) arr.splice(i, 1);
+        if (arr.length === 0) this.signalCells.delete(ck);
+      }
     }
     this.graph.removeTile(key);
     this.pedestrians.removeTile(key);

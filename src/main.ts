@@ -142,7 +142,7 @@ function loop(): void {
   }
 
   if (booted) {
-    vehicles.update(dt, camera.position, graph);
+    vehicles.update(dt, camera.position, graph, (p, d) => world.redSignalAhead(p, d, simTime));
     pedestrians.update(dt, camera.position);
     for (const s of world.signalSets()) s.update(simTime);
   }

@@ -44,15 +44,29 @@ function getSignalGeos(): { pole: THREE.BufferGeometry; bulb: THREE.BufferGeomet
   return { pole: signalGeo, bulb: bulbGeo! };
 }
 
+export interface SignalPoint {
+  x: number;
+  z: number;
+  offset: number;
+}
+
 export interface PropsResult {
   group: THREE.Object3D | null;
   lampHeads: THREE.Vector3[];
   signals: TrafficSignalSet | null;
+  signalPoints: SignalPoint[];
+}
+
+export const SIGNAL_CYCLE = 14;
+
+/** Single source of truth for the signal phase — bulbs AND vehicles use it. */
+export function signalPhase(timeSec: number, offset: number): 0 | 1 | 2 {
+  const t = (timeSec + offset) % SIGNAL_CYCLE;
+  return t < 6 ? 0 : t < 7.2 ? 1 : 2; // green, yellow, red
 }
 
 /** Cycles red→green phases on instanced signal bulbs; one set per tile. */
 export class TrafficSignalSet {
-  static readonly CYCLE = 14;
   constructor(
     public mesh: THREE.InstancedMesh,
     private offsets: number[],
@@ -61,8 +75,7 @@ export class TrafficSignalSet {
   update(timeSec: number): void {
     const c = new THREE.Color();
     for (let s = 0; s < this.offsets.length; s++) {
-      const t = (timeSec + this.offsets[s]) % TrafficSignalSet.CYCLE;
-      const state = t < 6 ? 0 : t < 7.2 ? 1 : 2; // green, yellow, red
+      const state = signalPhase(timeSec, this.offsets[s]);
       const colors: [number, number, number][] = [
         state === 2 ? [1, 0.1, 0.1] : [0.16, 0.05, 0.05],
         state === 1 ? [1, 0.75, 0.1] : [0.16, 0.12, 0.04],
@@ -160,6 +173,7 @@ export function buildProps(
   // ---- traffic signals ----
   const signalPois = pois.filter((p) => p.kind === 'signal');
   let signals: TrafficSignalSet | null = null;
+  const signalPoints: SignalPoint[] = [];
   if (signalPois.length > 0) {
     const { pole, bulb } = getSignalGeos();
     const poleMesh = new THREE.InstancedMesh(pole, mats.pole, signalPois.length);
@@ -176,7 +190,9 @@ export function buildProps(
         m.makeTranslation(p.x, y + 3.62 - k * 0.26, p.z + 0.13);
         bulbMesh.setMatrixAt(i * 3 + k, m);
       }
-      offsets.push((hashStr(p.id) % 1400) / 100);
+      const offset = (hashStr(p.id) % 1400) / 100;
+      offsets.push(offset);
+      signalPoints.push({ x: p.x, z: p.z, offset });
     }
     poleMesh.castShadow = true;
     poleMesh.instanceMatrix.needsUpdate = true;
@@ -186,5 +202,5 @@ export function buildProps(
     signals.update(0);
   }
 
-  return { group: group.children.length > 0 ? group : null, lampHeads, signals };
+  return { group: group.children.length > 0 ? group : null, lampHeads, signals, signalPoints };
 }
