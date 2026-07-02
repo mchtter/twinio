@@ -9,11 +9,15 @@ import { buildAreas } from './greenery';
 import { buildProps, TrafficSignalSet } from './props';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
+import { CollisionIndex } from './collision';
+
+type TileMode = 'full' | 'light';
 
 interface TileEntry {
   key: string;
   x: number;
   y: number;
+  mode: TileMode;
   group: THREE.Group | null; // null while loading
   signals: TrafficSignalSet | null;
   lampHeads: THREE.Vector3[];
@@ -36,6 +40,7 @@ export class World {
     private terrain: TerrainManager,
     private graph: RoadGraph,
     private pedestrians: PedestrianSystem,
+    readonly collision: CollisionIndex,
   ) {}
 
   get loadedCount(): number {
@@ -58,21 +63,29 @@ export class World {
     }
   }
 
-  /** Called when the camera moved; loads/unloads tiles as needed. */
+  /** Called when the camera moved; loads/upgrades/unloads tiles as needed. */
   update(lat: number, lon: number): void {
     const z = CONFIG.dataZoom;
     const cx = Math.floor(lon2tile(lon, z));
     const cy = Math.floor(lat2tile(lat, z));
 
-    for (let dy = -CONFIG.dataRadius; dy <= CONFIG.dataRadius; dy++) {
-      for (let dx = -CONFIG.dataRadius; dx <= CONFIG.dataRadius; dx++) {
-        const key = tileKey(z, cx + dx, cy + dy);
-        if (!this.tiles.has(key)) {
-          this.loadTile(cx + dx, cy + dy).catch((e) => {
-            console.warn('tile load failed', key, e);
-            this.tiles.delete(key);
-            this.onError?.('OSM verisi alınamadı — tekrar denenecek');
-          });
+    // full-detail core first, then the light LOD ring
+    for (let ring = 0; ring <= CONFIG.lodRadius; ring++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+          const mode: TileMode = ring <= CONFIG.dataRadius ? 'full' : 'light';
+          const key = tileKey(z, cx + dx, cy + dy);
+          const existing = this.tiles.get(key);
+          if (existing) {
+            // upgrade a finished light tile that entered the full radius
+            if (existing.mode === 'light' && mode === 'full' && existing.group) {
+              this.unloadTile(key);
+              this.startLoad(cx + dx, cy + dy, mode, key);
+            }
+            continue;
+          }
+          this.startLoad(cx + dx, cy + dy, mode, key);
         }
       }
     }
@@ -84,6 +97,14 @@ export class World {
     }
   }
 
+  private startLoad(x: number, y: number, mode: TileMode, key: string): void {
+    this.loadTile(x, y, mode).catch((e) => {
+      console.warn('tile load failed', key, e);
+      this.tiles.delete(key);
+      this.onError?.('OSM verisi alınamadı — tekrar denenecek');
+    });
+  }
+
   reset(): void {
     this.generation++;
     for (const key of [...this.tiles.keys()]) this.unloadTile(key);
@@ -91,18 +112,18 @@ export class World {
     this.loadingCount = 0;
   }
 
-  private async loadTile(x: number, y: number): Promise<void> {
+  private async loadTile(x: number, y: number, mode: TileMode): Promise<void> {
     const z = CONFIG.dataZoom;
     const key = tileKey(z, x, y);
     const gen = this.generation;
-    const entry: TileEntry = { key, x, y, group: null, signals: null, lampHeads: [] };
+    const entry: TileEntry = { key, x, y, mode, group: null, signals: null, lampHeads: [] };
     this.tiles.set(key, entry);
     this.loadingCount++;
     this.emitStatus();
 
     try {
       const elements = await fetchOsmTile(z, x, y);
-      if (gen !== this.generation || !this.tiles.has(key)) return;
+      if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
       const claim = (id: string): boolean => {
         const owner = this.claims.get(id);
@@ -114,34 +135,45 @@ export class World {
       const sample = this.terrain.sample;
       const group = new THREE.Group();
       group.name = `tile-${key}`;
+      const light = mode === 'light';
+
+      // light mode: no footpaths/sidewalks/crossings/trees/props/agents
+      const roadSpecs = light
+        ? parsed.roads.filter((r) => r.cls !== 'path').map((r) => ({ ...r, sidewalks: false }))
+        : parsed.roads;
+      const areaSpecs = light ? parsed.areas.map((a) => ({ ...a, treeDensity: 0 })) : parsed.areas;
+      const poiSpecs = light ? [] : parsed.pois;
 
       // build in slices with frame yields to avoid long main-thread stalls
       const buildings = buildBuildings(parsed.buildings, sample);
       if (buildings) group.add(buildings);
       await nextFrame();
-      if (gen !== this.generation || !this.tiles.has(key)) return;
+      if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const roads = buildRoads(parsed.roads, parsed.pois, sample);
+      const roads = buildRoads(roadSpecs, poiSpecs, sample);
       if (roads.group) group.add(roads.group);
       await nextFrame();
-      if (gen !== this.generation || !this.tiles.has(key)) return;
+      if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const areas = buildAreas(parsed.areas, parsed.pois, sample);
+      const areas = buildAreas(areaSpecs, poiSpecs, sample);
       if (areas.areas) group.add(areas.areas);
       if (areas.trees) group.add(areas.trees);
       await nextFrame();
-      if (gen !== this.generation || !this.tiles.has(key)) return;
+      if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const props = buildProps(parsed.roads, parsed.pois, sample);
-      if (props.group) group.add(props.group);
+      if (!light) {
+        const props = buildProps(parsed.roads, parsed.pois, sample);
+        if (props.group) group.add(props.group);
+        entry.signals = props.signals;
+        entry.lampHeads = props.lampHeads;
+        this.graph.addTile(key, roads.drivable);
+        this.pedestrians.addTile(key, roads.walkable);
+        this.collision.addTile(key, parsed.buildings);
+      }
 
       entry.group = group;
-      entry.signals = props.signals;
-      entry.lampHeads = props.lampHeads;
       this.applyVisibility(group);
       this.scene.add(group);
-      this.graph.addTile(key, roads.drivable);
-      this.pedestrians.addTile(key, roads.walkable);
     } finally {
       this.loadingCount--;
       this.emitStatus();
@@ -164,6 +196,7 @@ export class World {
     }
     this.graph.removeTile(key);
     this.pedestrians.removeTile(key);
+    this.collision.removeTile(key);
     this.emitStatus();
   }
 

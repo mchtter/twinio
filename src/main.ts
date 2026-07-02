@@ -4,6 +4,7 @@ import { GeoProjection } from './geo/proj';
 import { ElevationManager } from './terrain/sources';
 import { TerrainManager } from './terrain/terrain';
 import { World } from './world/tileManager';
+import { CollisionIndex } from './world/collision';
 import { RoadGraph } from './agents/graph';
 import { VehicleSystem } from './agents/vehicles';
 import { PedestrianSystem } from './agents/pedestrians';
@@ -42,9 +43,12 @@ const terrain = new TerrainManager(scene, elevation, proj);
 const graph = new RoadGraph();
 const pedestrians = new PedestrianSystem(scene);
 const vehicles = new VehicleSystem(scene);
-const world = new World(scene, terrain, graph, pedestrians);
+const collision = new CollisionIndex();
+const world = new World(scene, terrain, graph, pedestrians, collision);
 const env = new Environment(scene, renderer);
-const controls = new PlayerControls(camera, renderer.domElement, terrain.sample);
+const controls = new PlayerControls(camera, renderer.domElement, terrain.sample, (x, z, r) =>
+  collision.resolve(x, z, r),
+);
 
 const hud = new Hud({
   onHourChange: (h) => env.setHour(h),

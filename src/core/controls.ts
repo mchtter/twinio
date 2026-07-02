@@ -17,6 +17,7 @@ export class PlayerControls {
     private camera: THREE.PerspectiveCamera,
     dom: HTMLElement,
     private sample: HeightSampler,
+    private resolveCollision?: (x: number, z: number, r: number) => { x: number; z: number },
   ) {
     this.lock = new PointerLockControls(camera, dom);
 
@@ -87,6 +88,12 @@ export class PlayerControls {
       if (move.lengthSq() > 0) {
         move.normalize().multiplyScalar((fast ? CONFIG.runSpeed : CONFIG.walkSpeed) * dt);
         cam.position.add(move);
+      }
+      // slide along building footprints
+      if (this.resolveCollision) {
+        const c = this.resolveCollision(cam.position.x, cam.position.z, 0.45);
+        cam.position.x = c.x;
+        cam.position.z = c.z;
       }
       const targetY = this.sample(cam.position.x, cam.position.z) + CONFIG.eyeHeight;
       // smooth vertical follow (stairs/slopes)

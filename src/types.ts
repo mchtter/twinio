@@ -13,6 +13,8 @@ export interface BuildingSpec {
   holes: V2[][];
   height: number;
   kind: string;       // raw building tag value
+  roofShape?: 'flat' | 'gabled';
+  roofHeight?: number;
 }
 
 export interface RoadSpec {

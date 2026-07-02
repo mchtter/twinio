@@ -13,7 +13,8 @@
 | Katman | Zoom | Boyut (~41°K) | Yarıçap | İçerik |
 | --- | --- | --- | --- | --- |
 | Arazi | z14 | ~1.9 km | 1 (3×3) | DEM grid 65×65, mesh + yükseklik örnekleyici |
-| Veri | z15 | ~0.95 km | 1 (3×3) | OSM: bina/yol/alan/POI → 3D |
+| Veri (tam) | z15 | ~0.95 km | 1 (3×3) | OSM: bina/yol/alan/POI → 3D, ajan + çarpışma kaydı |
+| Veri (hafif LOD) | z15 | ~0.95 km | 2 (5×5 halka) | Yalnız bina+yol+alan; ağaç/donatı/ajan yok. Kamera yaklaşınca tam moda yeniden kurulur |
 
 Akış döngüsü (0.5 s'de bir): kamera karosu değiştiyse eksik karolar yüklenir, `unloadRadius` dışındakiler dispose edilir. Veri karosu kurulmadan önce arazi örnekleyicisinin hazır olması beklenir (her şey araziye "drape" edilir).
 
@@ -27,7 +28,8 @@ Akış döngüsü (0.5 s'de bir): kamera karosu değiştiyse eksik karolar yükl
 
 ## 2D → 3D üretim motoru
 
-- **Binalar** (`buildings.ts`): taban halkası → duvar quad'ları (metre-uv cephe dokusu, gece emissive pencere haritası) + `ShapeGeometry` çatı (delik destekli). Yükseklik: `height` → `building:levels`×3.1 → tür bazlı varsayılan + deterministik jitter. Karo başına 2 birleştirilmiş mesh (duvar + çatı).
+- **Binalar** (`buildings.ts`): taban halkası → duvar quad'ları (metre-uv cephe dokusu, gece emissive pencere haritası) + çatı: dörtgen tabanlı müstakil evlerde beşik çatı (`roof:shape` veya tür sezgiseli; kalkan üçgenleri duvar rengiyle), diğerlerinde `ShapeGeometry` düz çatı (delik destekli). Yükseklik: `height` → `building:levels`×3.1 → tür bazlı varsayılan + deterministik jitter. Karo başına 2 birleştirilmiş mesh (duvar + çatı).
+- **Çarpışma** (`collision.ts`): bina taban kenarları 8 m'lik uniform grid hash'e yazılır; yürüme modunda oyuncu dairesi (r=0.45) yakın kenarlardan dışarı itilir (2 geçiş, kayarak ilerleme).
 - **Yollar** (`roads.ts`): polyline → miter-join şerit (ribbon), sınıf bazlı genişlik; ana yollarda şerit çizgisi dokusu. Kaldırımlar merkez çizgiden offset. OSM `crossing` node'ları en yakın yol segmentine kenetlenip zebra decal olur. Y-ofset katmanlaması z-fighting'i önler (alan < patika < yol < kaldırım < zebra).
 - **Alanlar** (`greenery.ts`): `ShapeGeometry` araziye vertex bazında drape edilir; dünya-uzayı UV. Ağaçlar polygon içine deterministik (feature-id seed) serpilir, türe göre yoğunluk (orman > park > çim), karo başına tek `InstancedMesh`.
 - **Donatılar** (`props.ts`): OSM lamba node'ları + aydınlatılmış yollar boyunca ~27 m aralıkla prosedürel lambalar (9 m grid ile çakışma önleme). Trafik ışıkları instanced; faz döngüsü instanceColor ile sürülür.

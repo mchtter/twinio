@@ -5,8 +5,9 @@ export const CONFIG = {
 
   // OSM data tiles (slippy tile scheme)
   dataZoom: 15,
-  dataRadius: 1,      // tiles around camera to keep loaded (1 => 3x3)
-  unloadRadius: 2,    // tiles farther than this get disposed
+  dataRadius: 1,      // full-detail tiles around camera (1 => 3x3)
+  lodRadius: 2,       // light-mode ring: buildings+roads+areas only (2 => 5x5)
+  unloadRadius: 3,    // tiles farther than this get disposed
 
   // Terrain (DEM) tiles
   terrainZoom: 14,

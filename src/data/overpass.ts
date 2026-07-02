@@ -164,6 +164,15 @@ function parseHeight(tags: Record<string, string>, id: number, kind: string): nu
   return b * (0.75 + hash01(id) * 0.6);
 }
 
+function parseRoof(tags: Record<string, string>): { roofShape?: 'flat' | 'gabled'; roofHeight?: number } {
+  const shape = tags['roof:shape'];
+  const h = parseFloat(tags['roof:height'] ?? '');
+  return {
+    roofShape: shape === 'gabled' || shape === 'hipped' ? 'gabled' : shape ? 'flat' : undefined,
+    roofHeight: isFinite(h) && h > 0 ? Math.min(h, 12) : undefined,
+  };
+}
+
 function multipolygonRings(el: OverpassElement, proj: GeoProjection): { outers: V2[][]; holes: V2[][] } {
   const outers: V2[][] = [];
   const holes: V2[][] = [];
@@ -217,6 +226,7 @@ export function parseTile(
           id, outer, holes: [],
           height: parseHeight(tags, el.id, tags['building']),
           kind: tags['building'],
+          ...parseRoof(tags),
         });
         continue;
       }
@@ -275,6 +285,7 @@ export function parseTile(
             id: subId, outer: outers[i], holes: myHoles,
             height: parseHeight(tags, el.id, tags['building']!),
             kind: tags['building']!,
+            ...parseRoof(tags),
           });
         } else if (kind) {
           areas.push({ id: subId, outer: outers[i], holes: myHoles, kind: kind.kind, treeDensity: kind.density });

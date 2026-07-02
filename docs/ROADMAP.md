@@ -10,13 +10,16 @@
 - [x] Birinci şahıs yürüme + uçuş modu, gün/gece döngüsü, katman kontrolü
 - [x] GitHub Pages deploy
 
-## Faz 1 — Engine sağlamlaştırma
+## Faz 1 — Engine sağlamlaştırma (devam ediyor)
 
+- [x] Beşik çatılar: `roof:shape=gabled/hipped` + müstakil ev sezgiseli (dörtgen taban)
+- [x] LOD halkası: 5×5 karo, dış halka hafif mod (bina+yol+alan; ağaç/donatı/ajan yok), yaklaşınca tam moda yükseltme
+- [x] Oyuncu-bina çarpışması (yürüme modunda taban kenarlarından kayarak itme, 8 m grid hash)
 - [ ] Geometri üretimini Web Worker'lara taşıma (ana thread tamamen serbest)
 - [ ] Vektör karo sunucusuna geçiş seçeneği (Overpass bağımlılığını azaltır; protomaps/pmtiles)
-- [ ] Bina çatı tipleri (`roof:shape`: beşik/kırma), `building:part` desteği
-- [ ] LOD: uzak karolarda basitleştirilmiş bina kütleleri, ağaç billboard'ları
-- [ ] Oyuncu-bina çarpışması, köprü/viyadük geometrisi, tünel desteği
+- [ ] Kırma (hipped) çatı, `building:part` desteği
+- [ ] Uzak karolarda ağaç billboard'ları
+- [ ] Köprü/viyadük geometrisi, tünel desteği
 - [ ] Su shader'ı (dalga/yansıma), yağmur-kar efektleri
 
 ## Faz 2 — Trafik simülasyonu
