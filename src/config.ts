@@ -55,11 +55,13 @@ export const CONFIG = {
   eyeHeight: 1.75,
 
   // Data endpoints
+  // fallbacks must send CORS headers (kumi.systems doesn't → unusable in browsers)
   overpassEndpoints: [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   ],
   overpassConcurrency: 2,
+  overpassTimeoutMs: 45000,
   osmCacheTtlMs: 7 * 24 * 3600 * 1000,
   terrariumUrl: (z: number, x: number, y: number) =>
     `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,

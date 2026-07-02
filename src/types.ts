@@ -47,11 +47,21 @@ export interface PoiSpec {
   kind: PoiKind;
 }
 
+/** Minimal road geometry used for clearance/junction rules — includes ways
+ * claimed (rendered) by neighbouring tiles, so rules work across tile borders. */
+export interface RuleRoad {
+  id: string;
+  pts: V2[];
+  width: number;
+  cls: RoadClass;
+}
+
 export interface ParsedTile {
   buildings: BuildingSpec[];
   roads: RoadSpec[];
   areas: AreaSpec[];
   pois: PoiSpec[];
+  ruleRoads: RuleRoad[];
 }
 
 /** Height sampler: world x/z -> terrain elevation (meters). */

@@ -152,10 +152,11 @@ export class World {
       const poiSpecs = light ? [] : parsed.pois;
 
       // engine rule sources: nothing inside building footprints,
-      // nothing (sidewalk/lamp) on another road's carriageway
+      // nothing (sidewalk/lamp) on another road's carriageway.
+      // ruleRoads is claim-independent → rules hold across tile borders.
       const footprints = new FootprintGrid(parsed.buildings);
       const clearance = new RoadClearanceGrid();
-      for (const r of parsed.roads) {
+      for (const r of parsed.ruleRoads) {
         if (r.cls !== 'path' && r.pts.length >= 2) clearance.add(r.id, r.pts, r.width / 2);
       }
 
@@ -165,7 +166,7 @@ export class World {
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints, clearance);
+      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints, clearance, parsed.ruleRoads, claim);
       if (roads.group) group.add(roads.group);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;

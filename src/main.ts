@@ -80,9 +80,16 @@ const hud = new Hud({
   },
 });
 
-controls.onLock(() => hud.setLocked(true));
-controls.onUnlock(() => hud.setLocked(false));
-controls.onModeChange = (m) => hud.setMode(m);
+// lock overlay is only relevant in walk mode while the pointer is free
+const refreshOverlay = () => hud.setLocked(!(controls.mode === 'walk' && !controls.isLocked));
+controls.onLock(refreshOverlay);
+controls.onUnlock(refreshOverlay);
+controls.onModeChange = (m) => {
+  hud.setMode(m);
+  refreshOverlay();
+};
+hud.setMode(controls.mode);
+refreshOverlay();
 
 elevation.onSourceChange = (name) => hud.showToast(`Copernicus DEM erişilemedi → ${name} kullanılıyor`);
 
@@ -98,7 +105,6 @@ async function teleport(lat: number, lon: number): Promise<void> {
   terrain.reset(proj);
   vehicles.reset();
   pedestrians.reset();
-  camera.position.set(0, 45, 0);
   await boot(lat, lon);
 }
 
@@ -110,7 +116,7 @@ async function boot(lat: number, lon: number): Promise<void> {
     console.error('terrain boot failed', e);
     hud.showToast('Arazi yüklenemedi — düz zeminle devam ediliyor');
   }
-  camera.position.y = terrain.sample(0, 0) + CONFIG.eyeHeight;
+  controls.focus(0, 0, 300);
   world.update(lat, lon);
   hud.showToast('OSM verileri yükleniyor…', 6000);
   booted = true;
@@ -179,6 +185,7 @@ loop();
   camera,
   setHour: (h: number) => env.setHour(h),
   place: (x: number, y: number, z: number, pitch = 0, yaw = 0) => {
+    controls.detachForDebug();
     camera.position.set(x, y, z);
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
   },

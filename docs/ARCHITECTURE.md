@@ -46,8 +46,8 @@ OSM/DEM verisi mükemmel değildir; görüntü bütünlüğünü motor garanti e
 6. **Üçgen-tutarlı örnekleyici**: yükseklik örnekleyici, arazi mesh'inin render ettiği üçgen yüzeyin TA KENDİSİNİ enterpolasyon yapar (bilinear değil) — örneklenen her nokta görünen yüzeyle birebir aynıdır.
 7. **DEM bekleme kuralı**: veri karosu, kapsadığı alan (+300 m taşma payı) DEM ile örtülmeden asla kurulmaz — tahmini yükseklikle inşa edilip sonradan arazi altında kalan geometri oluşamaz.
 8. **Orta nokta sondajı**: yol vertex yüksekliği, komşu vertex'lere giden orta noktaların arazi kotunu da yoklar — iki örnek arasındaki arazi sırtı şeridi delemez.
-9. **Kavşak kapakları**: ≥3 kolun birleştiği her düğüme, en geniş kolun ~%72'si yarıçapında drape edilmiş düz asfalt disk basılır — üst üste binen şerit uçları, T-birleşimler ve çatallanma kamaları görünmez olur.
-10. **Taşıt yolu açıklık kuralı**: kaldırım vertex'leri ve lambalar, *kendi yolu hariç* her yolun taşıt yolu genişliğine (grid hash, nokta-segment mesafesi) karşı test edilir — başka bir yolun asfaltına düşen kaldırım segmenti/lamba üretilmez. Geometriden türediği için T/X/Y/çok-kollu her kesişim topolojisinde çalışır.
+9. **Kavşak plakaları**: ≥3 kolun birleştiği her düğüme, kolların gerçek genişliklerini izleyen **birleşik asfalt poligonu** basılır (her kolun ağzında ±yarı-genişlik köşe noktaları, açıya göre sıralanıp düğümden fan örülür) — kesişim tek sürekli yüzey gibi okunur; şerit uçları, T-birleşimler ve çatallanma kamaları görünmez.
+10. **Taşıt yolu açıklık kuralı**: kaldırım vertex'leri ve lambalar, *kendi yolu hariç* her yolun taşıt yolu genişliğine (grid hash, nokta-segment mesafesi) karşı test edilir — başka bir yolun asfaltına düşen kaldırım segmenti/lamba üretilmez. Kural geometrisi **sahiplik (claim) bağımsızdır**: komşu karonun render ettiği yollar da bu karonun kurallarına girer, karo sınırındaki kesişimler de temizdir.
 11. **Offset katlanma ayıklama**: kaldırım offset çizgisinin bir segmenti, ebeveyn segmentine ters yönde akıyorsa (iç bükey keskin köşede kendi üzerine katlanma) o vertex'ler atılır — soluk üçgen/kama artıkları oluşamaz.
 
 ## Ajanlar

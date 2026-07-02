@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config';
-import type { RoadSpec, PoiSpec, HeightSampler, V2 } from '../types';
+import type { RoadSpec, PoiSpec, HeightSampler, V2, RuleRoad } from '../types';
 import { offsetPolyline, subdividePolyline, hashStr } from './geomUtils';
 import { getMaterials } from './materials';
 import { FootprintGrid, RoadClearanceGrid } from './collision';
@@ -37,6 +37,8 @@ export function buildRoads(
   sample: HeightSampler,
   footprints?: FootprintGrid,
   clearance?: RoadClearanceGrid,
+  ruleRoads?: RuleRoad[],
+  claimNode?: (key: string) => boolean,
 ): RoadBuildResult {
   const buckets = {
     major: newBucket(),
@@ -92,30 +94,38 @@ export function buildRoads(
     }
   }
 
-  // ---- junction caps: an asphalt disc over every node where ≥3 road arms meet,
-  // hiding overlapping ribbon ends, forks and T-junction seams
-  interface JNode { x: number; z: number; width: number; arms: number }
+  // ---- junction plates: a merged asphalt polygon over every node where ≥3 road
+  // arms meet. The polygon follows each arm's real width (corner points at the
+  // arm mouths), so the intersection reads as one continuous surface.
+  // Built from rule roads (claim-independent) → works across tile borders;
+  // claimNode dedupes the plate itself between tiles.
+  interface JArm { dx: number; dz: number; hw: number }
+  interface JNode { x: number; z: number; arms: JArm[] }
   const jnodes = new Map<string, JNode>();
-  for (const r of roads) {
+  const jroads = ruleRoads ?? roads;
+  for (const r of jroads) {
     if (r.cls === 'path' || r.pts.length < 2) continue;
     for (let k = 0; k < r.pts.length; k++) {
       const p = r.pts[k];
       const key = `${Math.round(p.x)}_${Math.round(p.z)}`;
       let nd = jnodes.get(key);
       if (!nd) {
-        nd = { x: p.x, z: p.z, width: 0, arms: 0 };
+        nd = { x: p.x, z: p.z, arms: [] };
         jnodes.set(key, nd);
       }
-      nd.width = Math.max(nd.width, r.width);
-      // each neighbor vertex = one arm leaving this node
-      if (k > 0) nd.arms++;
-      if (k < r.pts.length - 1) nd.arms++;
+      for (const nb of [r.pts[k - 1], r.pts[k + 1]]) {
+        if (!nb) continue;
+        const dx = nb.x - p.x;
+        const dz = nb.z - p.z;
+        const l = Math.hypot(dx, dz);
+        if (l > 1e-6) nd.arms.push({ dx: dx / l, dz: dz / l, hw: r.width / 2 });
+      }
     }
   }
-  for (const nd of jnodes.values()) {
-    if (nd.arms < 3) continue; // straight continuations (2 arms) need no cap
-    const radius = Math.min(Math.max(nd.width * 0.72 + 0.6, 2.5), 12);
-    addJunctionFan(buckets.junction, nd.x, nd.z, radius, sample);
+  for (const [key, nd] of jnodes) {
+    if (nd.arms.length < 3) continue; // straight continuations need no plate
+    if (claimNode && !claimNode(`jn:${key}`)) continue; // built by another tile
+    addJunctionPlate(buckets.junction, nd.x, nd.z, nd.arms, sample);
   }
 
   // zebra crossings snapped onto the nearest drivable road segment
@@ -241,25 +251,50 @@ function probedHeight(pts: V2[], i: number, sample: HeightSampler): number {
   return h;
 }
 
-/** Draped asphalt disc (triangle fan) capping a junction. */
-function addJunctionFan(b: Bucket, cx: number, cz: number, r: number, sample: HeightSampler): void {
-  const segs = 14;
+/** Draped merged junction plate: for every arm, two corner points at the arm
+ * mouth (center + dir·ext ± perp·halfWidth); all corners sorted by angle and
+ * fanned from the node — the plate hugs the actual arm widths. */
+function addJunctionPlate(
+  b: Bucket,
+  cx: number,
+  cz: number,
+  arms: { dx: number; dz: number; hw: number }[],
+  sample: HeightSampler,
+): void {
+  let maxHw = 0;
+  for (const a of arms) {
+    if (a.hw > maxHw) maxHw = a.hw;
+  }
+  const ext = Math.min(maxHw * 1.2 + 1.0, 14);
+  const corners: { x: number; z: number; ang: number }[] = [];
+  for (const a of arms) {
+    const w = a.hw + 0.15;
+    // perp (left) of arm dir
+    const px = a.dz;
+    const pz = -a.dx;
+    for (const s of [1, -1]) {
+      const x = cx + a.dx * ext + px * w * s;
+      const z = cz + a.dz * ext + pz * w * s;
+      corners.push({ x, z, ang: Math.atan2(z - cz, x - cx) });
+    }
+  }
+  if (corners.length < 3) return;
+  corners.sort((p, q) => p.ang - q.ang);
+
   const ch = sample(cx, cz);
   const base = b.pos.length / 3;
   b.pos.push(cx, ch + CONFIG.yJunction, cz);
   b.nor.push(0, 1, 0);
   b.uv.push(cx / 7, cz / 7);
-  for (let s = 0; s <= segs; s++) {
-    const a = (s / segs) * Math.PI * 2;
-    const x = cx + Math.cos(a) * r;
-    const z = cz + Math.sin(a) * r;
-    b.pos.push(x, Math.max(sample(x, z), ch) + CONFIG.yJunction, z);
+  for (const c of corners) {
+    b.pos.push(c.x, Math.max(sample(c.x, c.z), ch) + CONFIG.yJunction, c.z);
     b.nor.push(0, 1, 0);
-    b.uv.push(x / 7, z / 7);
+    b.uv.push(c.x / 7, c.z / 7);
   }
-  for (let s = 0; s < segs; s++) {
-    // (center, next, current) → face up
-    b.idx.push(base, base + 2 + s, base + 1 + s);
+  const n = corners.length;
+  for (let s = 0; s < n; s++) {
+    // (center, next, current) → face up (angle-ascending ring)
+    b.idx.push(base, base + 1 + ((s + 1) % n), base + 1 + s);
   }
 }
 

@@ -54,11 +54,11 @@ export class Hud {
         </div>
       </div>
       <div id="hud-help" class="hud panel">
-        <b>WASD</b> hareket · <b>Shift</b> hızlı · <b>F</b> <span id="mode-label">yürüme</span>/uçuş · <b>E/Q</b> yüksel/alçal · <b>ESC</b> imleci bırak
+        Mod: <b id="mode-label">izometrik</b> · <b>F</b> mod değiştir · <b>sürükle</b> kaydır · <b>sağ tık / Q·E</b> döndür · <b>tekerlek</b> zoom · <b>WASD</b> hareket · <b>Shift</b> hızlı
       </div>
       <div id="hud-toast" class="hud hidden"></div>
-      <div id="lock-overlay">
-        <div class="inner"><b>Twinio Dijital İkiz</b><br/><br/>Gezinmek için tıkla<br/><span style="font-size:12px;color:#8fa0b8">fare ile bak · WASD ile yürü · F ile uç</span></div>
+      <div id="lock-overlay" class="hidden">
+        <div class="inner"><b>Yürüme Modu</b><br/><br/>Bakışı kilitlemek için tıkla<br/><span style="font-size:12px;color:#8fa0b8">fare ile bak · WASD ile yürü · ESC imleci bırakır · F izometrik görünüme döner</span></div>
       </div>
       `,
     );
@@ -117,7 +117,7 @@ export class Hud {
   }
 
   setMode(mode: string): void {
-    this.modeLabel.textContent = mode === 'walk' ? 'yürüme' : 'UÇUŞ';
+    this.modeLabel.textContent = mode === 'walk' ? 'YÜRÜME' : 'izometrik';
   }
 
   showToast(msg: string, ms = 4000): void {

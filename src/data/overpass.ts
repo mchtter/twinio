@@ -1,7 +1,7 @@
 import { CONFIG } from '../config';
 import { tileBounds, tileKey, GeoProjection } from '../geo/proj';
 import { cacheGet, cacheSet } from '../geo/cache';
-import type { ParsedTile, BuildingSpec, RoadSpec, AreaSpec, PoiSpec, V2, RoadClass, AreaKind } from '../types';
+import type { ParsedTile, BuildingSpec, RoadSpec, AreaSpec, PoiSpec, V2, RoadClass, AreaKind, RuleRoad } from '../types';
 
 interface OverpassElement {
   type: 'node' | 'way' | 'relation';
@@ -65,10 +65,12 @@ export async function fetchOsmTile(z: number, x: number, y: number): Promise<Ove
     for (let attempt = 0; attempt < 4; attempt++) {
       const endpoint = CONFIG.overpassEndpoints[attempt % CONFIG.overpassEndpoints.length];
       try {
+        // hard timeout: a hung connection must not clog the fetch queue
         const resp = await fetch(endpoint, {
           method: 'POST',
           body: 'data=' + encodeURIComponent(query),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: AbortSignal.timeout(CONFIG.overpassTimeoutMs),
         });
         if (resp.status === 429 || resp.status === 504) {
           lastErr = new Error(`overpass ${resp.status}`);
@@ -197,6 +199,7 @@ export function parseTile(
   const roads: RoadSpec[] = [];
   const areas: AreaSpec[] = [];
   const pois: PoiSpec[] = [];
+  const ruleRoads: RuleRoad[] = [];
 
   for (const el of elements) {
     const tags = el.tags ?? {};
@@ -234,18 +237,21 @@ export function parseTile(
       const hw = tags['highway'];
       if (hw && ROAD_DEFS[hw]) {
         if (tags['tunnel'] === 'yes' || parseFloat(tags['layer'] ?? '0') < 0) continue;
-        if (!claim(id)) continue;
         const def = ROAD_DEFS[hw];
         const lanes = parseFloat(tags['lanes'] ?? '');
         const width = isFinite(lanes) && lanes > 0 ? Math.max(def.width, lanes * 3.2) : def.width;
+        const pts = el.geometry.map((g) => {
+          const w = proj.toWorld(g.lat, g.lon);
+          return { x: w.x, z: w.z };
+        });
+        if (pts.length < 2) continue;
+        // rule geometry is claim-independent: clearance/junction rules must see
+        // roads rendered by neighbouring tiles too
+        ruleRoads.push({ id, pts, width, cls: def.cls });
+        if (!claim(id)) continue;
         roads.push({
           id,
-          pts: ringToLocal(el.geometry, proj).length >= 2
-            ? el.geometry.map((g) => {
-                const w = proj.toWorld(g.lat, g.lon);
-                return { x: w.x, z: w.z };
-              })
-            : [],
+          pts,
           cls: def.cls,
           width,
           highway: hw,
@@ -294,7 +300,7 @@ export function parseTile(
     }
   }
 
-  return { buildings, roads, areas, pois };
+  return { buildings, roads, areas, pois, ruleRoads };
 }
 
 function classifyArea(tags: Record<string, string>): { kind: AreaKind; density: number } | undefined {

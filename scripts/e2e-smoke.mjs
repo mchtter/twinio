@@ -9,6 +9,7 @@ const URL = process.argv[3] ?? 'http://localhost:4188/?lat=40.9887&lon=29.0253';
 const browser = await puppeteer.launch({
   executablePath: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
   headless: 'new',
+  userDataDir: process.env.E2E_PROFILE ?? '/tmp/twinio-e2e-profile',
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--window-size=1440,900', '--hide-scrollbars'],
   defaultViewport: { width: 1440, height: 900 },
 });
