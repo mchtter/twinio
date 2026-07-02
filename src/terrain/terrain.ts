@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config';
-import { GeoProjection, lon2tile, lat2tile, tile2lat, tile2lon, tileKey } from '../geo/proj';
+import { GeoProjection, lon2tile, lat2tile, tile2lat, tile2lon, tileKey, TileBounds } from '../geo/proj';
 import { ElevationManager } from './sources';
 import { makeGroundTexture } from '../world/materials';
 
@@ -69,6 +69,27 @@ export class TerrainManager {
         this.tiles.delete(key);
       }
     }
+  }
+
+  /** Await DEM coverage for a geographic box (+margin) — data tiles are only
+   * built once every terrain tile they can touch is loaded, so nothing is ever
+   * built on guessed heights. */
+  async ensureCovering(b: TileBounds, marginM = 300): Promise<void> {
+    const z = CONFIG.terrainZoom;
+    const dLat = marginM / 111320;
+    const midLat = (b.north + b.south) / 2;
+    const dLon = marginM / (111320 * Math.cos((midLat * Math.PI) / 180));
+    const x0 = Math.floor(lon2tile(b.west - dLon, z));
+    const x1 = Math.floor(lon2tile(b.east + dLon, z));
+    const y0 = Math.floor(lat2tile(b.north + dLat, z));
+    const y1 = Math.floor(lat2tile(b.south - dLat, z));
+    const jobs: Promise<void>[] = [];
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        jobs.push(this.ensureTile(tx, ty));
+      }
+    }
+    await Promise.all(jobs);
   }
 
   ensureTile(tx: number, ty: number): Promise<void> {
@@ -184,12 +205,14 @@ export class TerrainManager {
     const i = Math.floor(u), j = Math.floor(v);
     const fu = u - i, fv = v - j;
     const g = tile.grid;
-    return (
-      g[j * size + i] * (1 - fu) * (1 - fv) +
-      g[j * size + i + 1] * fu * (1 - fv) +
-      g[(j + 1) * size + i] * (1 - fu) * fv +
-      g[(j + 1) * size + i + 1] * fu * fv
-    );
+    const h00 = g[j * size + i];
+    const h10 = g[j * size + i + 1];
+    const h01 = g[(j + 1) * size + i];
+    const h11 = g[(j + 1) * size + i + 1];
+    // interpolate on the SAME triangles the terrain mesh renders (split on fu+fv=1);
+    // bilinear would diverge from the visible surface by up to |h00+h11-h10-h01|/4
+    if (fu + fv <= 1) return h00 + fu * (h10 - h00) + fv * (h01 - h00);
+    return h11 + (1 - fu) * (h01 - h11) + (1 - fv) * (h10 - h11);
   };
 
   get tileCount(): number {

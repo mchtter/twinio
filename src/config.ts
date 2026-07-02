@@ -32,6 +32,8 @@ export const CONFIG = {
   yCrosswalk: 0.28,
   // per-road deterministic jitter added on top (kills same-class overlap z-fighting)
   yRoadJitter: 0.035,
+  // junction caps sit above every road (max 0.2+0.035) but below sidewalks (0.26)
+  yJunction: 0.245,
   // roads are subdivided to this max segment length so they drape the terrain
   roadSubdivision: 9,
 

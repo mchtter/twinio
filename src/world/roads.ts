@@ -41,6 +41,7 @@ export function buildRoads(
     path: newBucket(),
     sidewalk: newBucket(),
     crosswalk: newBucket(),
+    junction: newBucket(),
   };
   const drivable: RoadBuildResult['drivable'] = [];
   const walkable: THREE.Vector3[][] = [];
@@ -54,10 +55,10 @@ export function buildRoads(
     addRibbon(buckets[r.cls], pts, r.width, yOff, sample, r.cls === 'major' ? 8 : 6);
 
     if (r.cls !== 'path') {
-      const pts3 = pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z));
+      const pts3 = pts.map((p, i) => new THREE.Vector3(p.x, probedHeight(pts, i, sample) + yOff + 0.05, p.z));
       if (pts3.length >= 2) drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
     } else {
-      walkable.push(pts.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + yOff + 0.05, p.z)));
+      walkable.push(pts.map((p, i) => new THREE.Vector3(p.x, probedHeight(pts, i, sample) + yOff + 0.05, p.z)));
     }
 
     if (r.sidewalks && pts.length >= 2) {
@@ -69,6 +70,32 @@ export function buildRoads(
         }
       }
     }
+  }
+
+  // ---- junction caps: an asphalt disc over every node where ≥3 road arms meet,
+  // hiding overlapping ribbon ends, forks and T-junction seams
+  interface JNode { x: number; z: number; width: number; arms: number }
+  const jnodes = new Map<string, JNode>();
+  for (const r of roads) {
+    if (r.cls === 'path' || r.pts.length < 2) continue;
+    for (let k = 0; k < r.pts.length; k++) {
+      const p = r.pts[k];
+      const key = `${Math.round(p.x)}_${Math.round(p.z)}`;
+      let nd = jnodes.get(key);
+      if (!nd) {
+        nd = { x: p.x, z: p.z, width: 0, arms: 0 };
+        jnodes.set(key, nd);
+      }
+      nd.width = Math.max(nd.width, r.width);
+      // each neighbor vertex = one arm leaving this node
+      if (k > 0) nd.arms++;
+      if (k < r.pts.length - 1) nd.arms++;
+    }
+  }
+  for (const nd of jnodes.values()) {
+    if (nd.arms < 3) continue; // straight continuations (2 arms) need no cap
+    const radius = Math.min(Math.max(nd.width * 0.72 + 0.6, 2.5), 12);
+    addJunctionFan(buckets.junction, nd.x, nd.z, radius, sample);
   }
 
   // zebra crossings snapped onto the nearest drivable road segment
@@ -92,6 +119,7 @@ export function buildRoads(
     [buckets.major, mats.roadMajor, true],
     [buckets.minor, mats.roadMinor, true],
     [buckets.path, mats.path, true],
+    [buckets.junction, mats.junction, true],
     [buckets.sidewalk, mats.sidewalk, true],
     [buckets.crosswalk, mats.crosswalk, false],
   ];
@@ -156,8 +184,10 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const rx = p[i].x - dz * hw * scale;
     const rz = p[i].z + dx * hw * scale;
     // drape rule: edges never drop below the centerline level → the ribbon
-    // can bank with the terrain but cannot sink under it on cross-slopes
-    const ch = sample(p[i].x, p[i].z);
+    // can bank with the terrain but cannot sink under it on cross-slopes.
+    // probedHeight also checks segment midpoints so terrain crests between
+    // samples cannot poke through the ribbon.
+    const ch = probedHeight(p, i, sample);
     b.pos.push(
       lx, Math.max(sample(lx, lz), ch) + yOff, lz,
       rx, Math.max(sample(rx, rz), ch) + yOff, rz,
@@ -172,6 +202,44 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const li1 = li + 2;
     const ri1 = li + 3;
     b.idx.push(li, ri, li1, ri, ri1, li1);
+  }
+}
+
+/** Terrain height at pts[i], also probing the midpoints toward both neighbors —
+ * catches terrain-triangle crests between consecutive samples. */
+function probedHeight(pts: V2[], i: number, sample: HeightSampler): number {
+  const p = pts[i];
+  let h = sample(p.x, p.z);
+  if (i > 0) {
+    const q = pts[i - 1];
+    h = Math.max(h, sample((p.x + q.x) / 2, (p.z + q.z) / 2));
+  }
+  if (i < pts.length - 1) {
+    const q = pts[i + 1];
+    h = Math.max(h, sample((p.x + q.x) / 2, (p.z + q.z) / 2));
+  }
+  return h;
+}
+
+/** Draped asphalt disc (triangle fan) capping a junction. */
+function addJunctionFan(b: Bucket, cx: number, cz: number, r: number, sample: HeightSampler): void {
+  const segs = 14;
+  const ch = sample(cx, cz);
+  const base = b.pos.length / 3;
+  b.pos.push(cx, ch + CONFIG.yJunction, cz);
+  b.nor.push(0, 1, 0);
+  b.uv.push(cx / 7, cz / 7);
+  for (let s = 0; s <= segs; s++) {
+    const a = (s / segs) * Math.PI * 2;
+    const x = cx + Math.cos(a) * r;
+    const z = cz + Math.sin(a) * r;
+    b.pos.push(x, Math.max(sample(x, z), ch) + CONFIG.yJunction, z);
+    b.nor.push(0, 1, 0);
+    b.uv.push(x / 7, z / 7);
+  }
+  for (let s = 0; s < segs; s++) {
+    // (center, next, current) → face up
+    b.idx.push(base, base + 2 + s, base + 1 + s);
   }
 }
 

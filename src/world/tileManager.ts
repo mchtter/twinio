@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config';
-import { lon2tile, lat2tile, tileKey } from '../geo/proj';
+import { lon2tile, lat2tile, tileKey, tileBounds } from '../geo/proj';
 import { fetchOsmTile, parseTile } from '../data/overpass';
 import { TerrainManager } from '../terrain/terrain';
 import { buildBuildings } from './buildings';
@@ -123,6 +123,10 @@ export class World {
 
     try {
       const elements = await fetchOsmTile(z, x, y);
+      if (gen !== this.generation || this.tiles.get(key) !== entry) return;
+
+      // never build on guessed heights: DEM must cover this tile (+overhang margin) first
+      await this.terrain.ensureCovering(tileBounds(z, x, y));
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
       const claim = (id: string): boolean => {

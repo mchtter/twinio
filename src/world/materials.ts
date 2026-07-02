@@ -68,6 +68,15 @@ export function makeRoadTexture(marked: boolean): THREE.CanvasTexture {
   });
 }
 
+/** Plain asphalt without any markings — junction caps. */
+export function makeAsphaltTexture(): THREE.CanvasTexture {
+  return canvas(128, (ctx, s) => {
+    ctx.fillStyle = '#3b3d42';
+    ctx.fillRect(0, 0, s, s);
+    noise(ctx, s, 0.16, 45);
+  });
+}
+
 export function makePavementTexture(): THREE.CanvasTexture {
   return canvas(128, (ctx, s) => {
     ctx.fillStyle = '#a2a19c';
@@ -168,6 +177,7 @@ export function makeFacadeEmissiveTexture(): THREE.CanvasTexture {
 export interface SharedMaterials {
   roadMajor: THREE.MeshStandardMaterial;
   roadMinor: THREE.MeshStandardMaterial;
+  junction: THREE.MeshStandardMaterial;
   path: THREE.MeshStandardMaterial;
   sidewalk: THREE.MeshStandardMaterial;
   crosswalk: THREE.MeshStandardMaterial;
@@ -204,9 +214,12 @@ export function getMaterials(): SharedMaterials {
   sandTex.repeat.set(1 / 10, 1 / 10);
   pavementTex.repeat.set(1 / 2, 1 / 2);
 
+  const junctionTex = makeAsphaltTexture();
+
   shared = {
     roadMajor: new THREE.MeshStandardMaterial({ map: roadTexMajor, roughness: 0.92 }),
     roadMinor: new THREE.MeshStandardMaterial({ map: roadTexMinor, roughness: 0.94 }),
+    junction: new THREE.MeshStandardMaterial({ map: junctionTex, roughness: 0.93 }),
     path: new THREE.MeshStandardMaterial({ color: 0x8f8d86, roughness: 1 }),
     sidewalk: new THREE.MeshStandardMaterial({ map: pavementTex, roughness: 1 }),
     crosswalk: new THREE.MeshStandardMaterial({

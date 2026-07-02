@@ -39,7 +39,7 @@ await new Promise((r) => setTimeout(r, 3000));
 await page.screenshot({ path: `${SHOT_DIR}/world-aerial.png` });
 
 // street level
-await page.evaluate(() => window.__twinio.place(60, 32, 80, -0.12, 0.7));
+await page.evaluate(() => window.__twinio.place(40, 70, 40, -0.85, 0.6));
 await new Promise((r) => setTimeout(r, 2500));
 await page.screenshot({ path: `${SHOT_DIR}/world-street.png` });
 

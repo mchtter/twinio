@@ -43,6 +43,10 @@ OSM/DEM verisi mükemmel değildir; görüntü bütünlüğünü motor garanti e
 3. **Mikro-jitter**: her yol, id'sinden türetilen 0–3.5 cm'lik deterministik y-ofseti alır — aynı sınıftan çakışan yollarda z-fighting oluşmaz (katman sırası: alan < patika < yol < kaldırım < zebra korunur).
 4. **Taban izi (footprint) kuralı**: karo başına bina tabanları 16 m'lik grid hash'e yazılır; **bina içine düşen kaldırım segmenti, sokak lambası ve ağaç üretilmez**. Yayalar yalnız bina dışındaki kaldırım koşularında yürür.
 5. **Kentsel zemin**: arazi tabanı nötr toprak/beton tonundadır; yeşillik yalnız OSM poligonlarından gelir — şehir merkezi çim halıya dönmez.
+6. **Üçgen-tutarlı örnekleyici**: yükseklik örnekleyici, arazi mesh'inin render ettiği üçgen yüzeyin TA KENDİSİNİ enterpolasyon yapar (bilinear değil) — örneklenen her nokta görünen yüzeyle birebir aynıdır.
+7. **DEM bekleme kuralı**: veri karosu, kapsadığı alan (+300 m taşma payı) DEM ile örtülmeden asla kurulmaz — tahmini yükseklikle inşa edilip sonradan arazi altında kalan geometri oluşamaz.
+8. **Orta nokta sondajı**: yol vertex yüksekliği, komşu vertex'lere giden orta noktaların arazi kotunu da yoklar — iki örnek arasındaki arazi sırtı şeridi delemez.
+9. **Kavşak kapakları**: ≥3 kolun birleştiği her düğüme, en geniş kolun ~%72'si yarıçapında drape edilmiş düz asfalt disk basılır — üst üste binen şerit uçları, T-birleşimler ve çatallanma kamaları görünmez olur.
 
 ## Ajanlar
 
