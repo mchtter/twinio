@@ -7,6 +7,8 @@ export interface V2 {
 
 export type RoadClass = 'major' | 'minor' | 'path';
 
+export type RoofShape = 'flat' | 'gabled' | 'hipped' | 'pyramidal';
+
 export interface BuildingSpec {
   id: string;
   outer: V2[];        // open ring (last point != first)
@@ -14,8 +16,11 @@ export interface BuildingSpec {
   height: number;
   kind: string;       // raw building tag value
   use: string;        // canonical use (residential/commercial/industrial/stadium/…)
-  roofShape?: 'flat' | 'gabled';
+  roofShape?: RoofShape;
   roofHeight?: number;
+  wallColour?: string; // raw building:colour tag (CSS color)
+  roofColour?: string; // raw roof:colour tag (CSS color)
+  tags?: Record<string, string>; // raw OSM tags (inspector)
 }
 
 export interface RoadSpec {
@@ -27,6 +32,11 @@ export interface RoadSpec {
   oneway: boolean;
   sidewalks: boolean;
   lamps: boolean;
+  bridge: boolean;
+  tunnel: boolean;
+  /** effective vertical level: bridge ≥ 1, tunnel ≤ -1, else OSM layer (0) */
+  level: number;
+  tags?: Record<string, string>;
 }
 
 export type AreaKind = 'grass' | 'forest' | 'sand' | 'water' | 'parking' | 'zone';
@@ -38,6 +48,7 @@ export interface AreaSpec {
   kind: AreaKind;
   treeDensity: number; // trees per m²
   zoneColor?: [number, number, number]; // landuse tint (kind === 'zone')
+  tags?: Record<string, string>;
 }
 
 export type PoiKind = 'lamp' | 'signal' | 'crossing' | 'tree';
@@ -47,6 +58,7 @@ export interface PoiSpec {
   x: number;
   z: number;
   kind: PoiKind;
+  tags?: Record<string, string>;
 }
 
 /** Minimal road geometry used for clearance/junction rules — includes ways
@@ -57,6 +69,9 @@ export interface RuleRoad {
   width: number;
   cls: RoadClass;
   sidewalks: boolean;
+  bridge: boolean;
+  tunnel: boolean;
+  level: number;
 }
 
 export interface ParsedTile {

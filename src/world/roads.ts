@@ -16,12 +16,22 @@ function newBucket(): Bucket {
   return { pos: [], nor: [], uv: [], idx: [] };
 }
 
+/** Junction info surfaced to the inspector (first-class intersection data). */
+export interface JunctionInfo {
+  x: number;
+  z: number;
+  ext: number;
+  arms: number;
+}
+
 export interface RoadBuildResult {
   group: THREE.Object3D | null;
   /** center polylines with elevation, for the vehicle graph */
   drivable: { pts: THREE.Vector3[]; highway: string; oneway: boolean }[];
   /** polylines pedestrians can walk (footpaths + sidewalks) */
   walkable: THREE.Vector3[][];
+  /** junction plates owned (claimed) by this tile — inspector data */
+  junctions: JunctionInfo[];
 }
 
 /** Topological junction: a first-class intersection object. Arms point outward
@@ -47,12 +57,16 @@ function junctionNodeKey(p: V2): string {
 
 /** Detect intersections from claim-independent rule roads: any node shared by
  * ≥3 arms. OSM ways share node coordinates at true crossings, so this is the
- * topology already present in the data — made explicit. */
-function buildJunctions(roads: { pts: V2[]; width: number; cls: string; sidewalks?: boolean }[]): Map<string, Junction> {
+ * topology already present in the data — made explicit. Only ground-level
+ * (level 0) roads take part: a viaduct crossing above a street is NOT an
+ * intersection, even when broken data shares a node. */
+function buildJunctions(
+  roads: { pts: V2[]; width: number; cls: string; sidewalks?: boolean; level?: number }[],
+): Map<string, Junction> {
   interface Node { x: number; z: number; arms: JunctionArm[] }
   const nodes = new Map<string, Node>();
   for (const r of roads) {
-    if (r.cls === 'path' || r.pts.length < 2) continue;
+    if (r.cls === 'path' || r.pts.length < 2 || (r.level ?? 0) !== 0) continue;
     for (let k = 0; k < r.pts.length; k++) {
       const p = r.pts[k];
       const key = junctionNodeKey(p);
@@ -126,15 +140,114 @@ function trimStart(pts: V2[], dist: number): V2[] {
   return []; // consumed entirely by the junction area
 }
 
+/** Vertical profile for bridge/tunnel ways (already subdivided points):
+ * a straight line between the terrain heights at both portals/abutments.
+ * Bridges never sink below the terrain (+0.3 clearance keeps the deck riding
+ * over DSM humps); tunnels deliberately stay below it — the terrain trench
+ * is carved to this same profile, so road and trench floor always agree. */
+export function elevationProfile(
+  pts: V2[],
+  kind: 'bridge' | 'tunnel',
+  sample: HeightSampler,
+  sampleOrig: HeightSampler,
+): number[] {
+  const cum: number[] = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+  }
+  const len = Math.max(cum[cum.length - 1], 1e-6);
+  const h0 = sampleOrig(pts[0].x, pts[0].z);
+  const h1 = sampleOrig(pts[pts.length - 1].x, pts[pts.length - 1].z);
+  return pts.map((p, i) => {
+    const line = h0 + (h1 - h0) * (cum[i] / len);
+    return kind === 'bridge' ? Math.max(line, sample(p.x, p.z) + 0.3) : line;
+  });
+}
+
+const UNDERPASS_CLEARANCE = 5.2; // vertical gap under the crossing road
+const RAMP_GRADE = 0.12;         // ~12% approach ramps inside the tunnel way
+
+/** Tunnel/underpass profile. The 30 m DSM flattens narrow trenches, so the
+ * portal-to-portal line alone often stays at grade — the dip the data IMPLIES
+ * (layer<0 under a crossing road) must be synthesized: wherever a ground-level
+ * way crosses above, the profile is pushed ≥5.2 m below it, ramping back up to
+ * the portals so the tunnel still meets its connecting roads. */
+export function tunnelProfile(
+  pts: V2[],
+  ownId: string,
+  others: RuleRoad[],
+  sample: HeightSampler,
+  sampleOrig: HeightSampler,
+): number[] {
+  const base = elevationProfile(pts, 'tunnel', sample, sampleOrig);
+  const cum: number[] = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+  }
+  const len = Math.max(cum[cum.length - 1], 1e-6);
+
+  // find crossings with ground-level ways (bridges above don't force a dip —
+  // they already clear the road; other tunnels are siblings, not constraints)
+  const crossings: { cum: number; y: number }[] = [];
+  for (const o of others) {
+    if (o.id === ownId || o.tunnel || o.bridge || o.level !== 0 || o.pts.length < 2) continue;
+    for (let i = 1; i < pts.length; i++) {
+      for (let k = 1; k < o.pts.length; k++) {
+        const hit = segIntersect(pts[i - 1], pts[i], o.pts[k - 1], o.pts[k]);
+        if (!hit) continue;
+        crossings.push({
+          cum: cum[i - 1] + hit.t * (cum[i] - cum[i - 1]),
+          y: sampleOrig(hit.x, hit.z),
+        });
+      }
+    }
+  }
+  if (crossings.length === 0) return base;
+
+  return base.map((b, i) => {
+    let y = b;
+    for (const c of crossings) {
+      y = Math.min(y, c.y - UNDERPASS_CLEARANCE + RAMP_GRADE * Math.abs(cum[i] - c.cum));
+    }
+    // never dip faster than the ramp grade from either portal — the tunnel
+    // must still meet its connecting roads at grade
+    return Math.max(y, b - RAMP_GRADE * Math.min(cum[i], len - cum[i]));
+  });
+}
+
+function segIntersect(a: V2, b: V2, c: V2, d: V2): { x: number; z: number; t: number } | null {
+  const r1x = b.x - a.x, r1z = b.z - a.z;
+  const r2x = d.x - c.x, r2z = d.z - c.z;
+  const den = r1x * r2z - r1z * r2x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x - a.x) * r2z - (c.z - a.z) * r2x) / den;
+  const u = ((c.x - a.x) * r1z - (c.z - a.z) * r1x) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { x: a.x + r1x * t, z: a.z + r1z * t, t };
+}
+
+let pierGeo: THREE.BufferGeometry | undefined;
+
+function getPierGeometry(): THREE.BufferGeometry {
+  if (!pierGeo) {
+    pierGeo = new THREE.BoxGeometry(1.7, 1, 1.7);
+    pierGeo.translate(0, 0.5, 0); // base at origin → scale.y = pier height
+    pierGeo.userData.shared = true;
+  }
+  return pierGeo;
+}
+
 /** Builds road ribbons (with lane markings), sidewalks and zebra crossings.
  * Engine rules against broken/overlapping data:
  * - junctions are first-class: arms are trimmed, the plate IS the surface
  * - polylines are subdivided (~9 m) and draped vertex-by-vertex on the terrain
  * - every road gets a deterministic micro-offset in y → no same-class z-fighting
  * - sidewalk segments falling inside building footprints are skipped
- * - sidewalk segments on ANY other road's carriageway are skipped (junction-safe)
+ * - sidewalk segments on ANY other same-level road's carriageway are skipped
  * - offset fold-backs (sharp corners) are culled by direction-reversal detection
- * - kerb arcs connect adjacent arms' sidewalks around each junction */
+ * - kerb arcs connect adjacent arms' sidewalks around each junction
+ * - bridges/viaducts ride a straight deck profile with piers + parapets
+ * - tunnels/underpasses descend a portal-to-portal profile inside a carved trench */
 export function buildRoads(
   roads: RoadSpec[],
   crossings: PoiSpec[],
@@ -143,6 +256,7 @@ export function buildRoads(
   clearance?: RoadClearanceGrid,
   ruleRoads?: RuleRoad[],
   claimNode?: (key: string) => boolean,
+  sampleOrig?: HeightSampler,
 ): RoadBuildResult {
   const buckets = {
     major: newBucket(),
@@ -151,9 +265,13 @@ export function buildRoads(
     sidewalk: newBucket(),
     crosswalk: newBucket(),
     junction: newBucket(),
+    barrier: newBucket(),
   };
   const drivable: RoadBuildResult['drivable'] = [];
   const walkable: THREE.Vector3[][] = [];
+  const junctionInfos: JunctionInfo[] = [];
+  const piers: { x: number; z: number; y: number; h: number }[] = [];
+  const orig = sampleOrig ?? sample;
 
   // first-class intersections from claim-independent geometry (cross-tile safe)
   const junctions = buildJunctions(ruleRoads ?? roads);
@@ -165,8 +283,91 @@ export function buildRoads(
       (r.cls === 'major' ? CONFIG.yRoadMajor : r.cls === 'minor' ? CONFIG.yRoadMinor : CONFIG.yPath) + jitter;
     const vMeters = r.cls === 'major' ? 8 : 6;
 
-    // visual geometry is split at junctions and trimmed back — ribbons and
-    // sidewalks never enter the junction area; the plate is the real surface
+    // ---- elevated / buried ways: profile instead of terrain drape ----
+    if (r.bridge || r.tunnel) {
+      const pts = subdividePolyline(r.pts, CONFIG.roadSubdivision);
+      if (pts.length < 2) continue;
+      const prof = r.bridge
+        ? elevationProfile(pts, 'bridge', sample, orig)
+        : tunnelProfile(pts, r.id, ruleRoads ?? [], sample, orig);
+      // tunnels render wider so the ribbon fills the trench floor wall-to-wall
+      const renderW = r.tunnel ? r.width + 2.6 : r.width;
+      addRibbon(buckets[r.cls], pts, renderW, yOff, sample, vMeters, prof);
+
+      if (r.tunnel) {
+        // retaining walls where the way is genuinely buried
+        for (const side of [1, -1]) {
+          const line = offsetPolyline(pts, side * (r.width / 2 + 1.4));
+          const yBot = prof.map((y) => y + yOff - 0.3);
+          const yTop = line.map((p, i) => Math.max(orig(p.x, p.z), prof[i] + yOff) + 0.35);
+          const buried = line.map((p, i) => orig(p.x, p.z) - prof[i] > 0.5);
+          for (const run of splitRunsIdx(line, buried.map((b) => !b))) {
+            addWallStrip(
+              buckets.barrier,
+              run.pts,
+              yBot.slice(run.start, run.start + run.pts.length),
+              yTop.slice(run.start, run.start + run.pts.length),
+            );
+          }
+        }
+      } else {
+        // parapets along elevated deck sections + piers down to the ground
+        for (const side of [1, -1]) {
+          const line = offsetPolyline(pts, side * (r.width / 2 + 0.12));
+          const high = pts.map((p, i) => prof[i] - sample(p.x, p.z) > 1.1);
+          for (const run of splitRunsIdx(line, high.map((h) => !h))) {
+            const yBot = prof.slice(run.start, run.start + run.pts.length).map((y) => y + yOff - 0.1);
+            const yTop = prof.slice(run.start, run.start + run.pts.length).map((y) => y + yOff + 1.0);
+            addWallStrip(buckets.barrier, run.pts, yBot, yTop);
+          }
+        }
+        let cum = 0;
+        let next = 14;
+        for (let i = 1; i < pts.length; i++) {
+          cum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+          if (cum < next) continue;
+          next += 26;
+          const ground = sample(pts[i].x, pts[i].z);
+          const deck = prof[i] + yOff;
+          if (deck - ground > 3.2) {
+            piers.push({ x: pts[i].x, z: pts[i].z, y: ground - 0.6, h: deck - ground + 0.5 });
+          }
+        }
+      }
+
+      // sidewalks ride the deck (bridges only; tunnels have none)
+      if (r.sidewalks) {
+        for (const side of [1, -1]) {
+          const line = offsetPolyline(pts, side * (r.width / 2 + 1.05));
+          const bad = new Array<boolean>(line.length).fill(false);
+          for (let k = 0; k + 1 < line.length; k++) {
+            const dox = line[k + 1].x - line[k].x;
+            const doz = line[k + 1].z - line[k].z;
+            const dpx = pts[k + 1].x - pts[k].x;
+            const dpz = pts[k + 1].z - pts[k].z;
+            if (dox * dpx + doz * dpz < 0) bad[k] = bad[k + 1] = true;
+          }
+          for (const run of splitRunsIdx(line, bad)) {
+            const p3 = run.pts.map(
+              (p, k) => new THREE.Vector3(p.x, prof[run.start + k] + CONFIG.ySidewalk + 0.03, p.z),
+            );
+            addRibbon(
+              buckets.sidewalk, run.pts, 1.9, CONFIG.ySidewalk, sample, 2,
+              prof.slice(run.start, run.start + run.pts.length),
+            );
+            walkable.push(p3);
+          }
+        }
+      }
+
+      // agents follow the same profile — cars/pedestrians really cross the span
+      const pts3 = pts.map((p, i) => new THREE.Vector3(p.x, prof[i] + yOff + 0.05, p.z));
+      if (r.cls !== 'path') drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
+      else walkable.push(pts3);
+      continue;
+    }
+
+    // ---- ground-level roads: split at junctions + drape on terrain ----
     const trimmed = r.cls === 'path' ? [r.pts] : splitAndTrim(r.pts, junctions);
     for (const piece of trimmed) {
       const pts = subdividePolyline(piece, CONFIG.roadSubdivision);
@@ -191,7 +392,7 @@ export function buildRoads(
           for (let k = 0; k < line.length; k++) {
             if (bad[k]) continue;
             if (footprints?.inside(line[k].x, line[k].z)) bad[k] = true;
-            else if (clearance?.blocked(line[k].x, line[k].z, 1.15, r.id)) bad[k] = true;
+            else if (clearance?.blocked(line[k].x, line[k].z, 1.15, r.id, r.level)) bad[k] = true;
           }
           for (const run of splitRuns(line, bad)) {
             addRibbon(buckets.sidewalk, run, 1.9, CONFIG.ySidewalk, sample, 2);
@@ -216,12 +417,13 @@ export function buildRoads(
     if (claimNode && !claimNode(`jn:${key}`)) continue; // built by another tile
     addJunctionPlate(buckets.junction, j, key, sample);
     addKerbArcs(buckets.sidewalk, j, sample, walkable, footprints, clearance);
+    junctionInfos.push({ x: j.x, z: j.z, ext: j.ext, arms: j.arms.length });
   }
 
-  // zebra crossings snapped onto the nearest drivable road segment
+  // zebra crossings snapped onto the nearest GROUND-level drivable segment
   const roadSegs: { a: V2; b: V2; width: number }[] = [];
   for (const r of roads) {
-    if (r.cls === 'path') continue;
+    if (r.cls === 'path' || r.level !== 0) continue;
     for (let i = 1; i < r.pts.length; i++) {
       roadSegs.push({ a: r.pts[i - 1], b: r.pts[i], width: r.width });
     }
@@ -241,6 +443,7 @@ export function buildRoads(
     [buckets.path, mats.path, true],
     [buckets.junction, mats.junction, true],
     [buckets.sidewalk, mats.sidewalk, true],
+    [buckets.barrier, mats.barrier, true],
     [buckets.crosswalk, mats.crosswalk, false],
   ];
   for (const [b, mat, shadow] of defs) {
@@ -254,17 +457,43 @@ export function buildRoads(
     mesh.receiveShadow = shadow;
     group.add(mesh);
   }
+  if (piers.length > 0) {
+    const mesh = new THREE.InstancedMesh(getPierGeometry(), mats.barrier, piers.length);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < piers.length; i++) {
+      const p = piers[i];
+      m.makeScale(1, p.h, 1);
+      m.setPosition(p.x, p.y, p.z);
+      mesh.setMatrixAt(i, m);
+    }
+    mesh.castShadow = true;
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  }
   group.userData.cat = 'roads';
-  return { group: group.children.length > 0 ? group : null, drivable, walkable };
+  return { group: group.children.length > 0 ? group : null, drivable, walkable, junctions: junctionInfos };
 }
 
-/** Miter-joined ribbon along a polyline, draped on the terrain. */
-function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: HeightSampler, vMeters: number): void {
-  // filter near-duplicate points
+/** Miter-joined ribbon along a polyline. Draped on the terrain by default;
+ * with `profile` (bridge/tunnel) both edges take the given deck height. */
+function addRibbon(
+  b: Bucket,
+  pts: V2[],
+  width: number,
+  yOff: number,
+  sample: HeightSampler,
+  vMeters: number,
+  profile?: number[],
+): void {
+  // filter near-duplicate points (remember source indices for the profile)
   const p: V2[] = [pts[0]];
+  const src: number[] = [0];
   for (let i = 1; i < pts.length; i++) {
     const prev = p[p.length - 1];
-    if (Math.hypot(pts[i].x - prev.x, pts[i].z - prev.z) > 0.15) p.push(pts[i]);
+    if (Math.hypot(pts[i].x - prev.x, pts[i].z - prev.z) > 0.15) {
+      p.push(pts[i]);
+      src.push(i);
+    }
   }
   if (p.length < 2) return;
 
@@ -303,15 +532,21 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const lz = p[i].z - dx * hw * scale;
     const rx = p[i].x - dz * hw * scale;
     const rz = p[i].z + dx * hw * scale;
-    // drape rule: edges never drop below the centerline level → the ribbon
-    // can bank with the terrain but cannot sink under it on cross-slopes.
-    // probedHeight also checks segment midpoints so terrain crests between
-    // samples cannot poke through the ribbon.
-    const ch = probedHeight(p, i, sample);
-    b.pos.push(
-      lx, Math.max(sample(lx, lz), ch) + yOff, lz,
-      rx, Math.max(sample(rx, rz), ch) + yOff, rz,
-    );
+    if (profile) {
+      // deck profile: flat across the width (bridges/tunnels don't bank)
+      const y = profile[src[i]] + yOff;
+      b.pos.push(lx, y, lz, rx, y, rz);
+    } else {
+      // drape rule: edges never drop below the centerline level → the ribbon
+      // can bank with the terrain but cannot sink under it on cross-slopes.
+      // probedHeight also checks segment midpoints so terrain crests between
+      // samples cannot poke through the ribbon.
+      const ch = probedHeight(p, i, sample);
+      b.pos.push(
+        lx, Math.max(sample(lx, lz), ch) + yOff, lz,
+        rx, Math.max(sample(rx, rz), ch) + yOff, rz,
+      );
+    }
     b.nor.push(0, 1, 0, 0, 1, 0);
     const v = cum / vMeters;
     b.uv.push(0, v, 1, v);
@@ -322,6 +557,25 @@ function addRibbon(b: Bucket, pts: V2[], width: number, yOff: number, sample: He
     const li1 = li + 2;
     const ri1 = li + 3;
     b.idx.push(li, ri, li1, ri, ri1, li1);
+  }
+}
+
+/** Vertical wall strip along a polyline (parapets, retaining walls). */
+function addWallStrip(b: Bucket, line: V2[], yBot: number[], yTop: number[]): void {
+  let cum = 0;
+  for (let i = 0; i + 1 < line.length; i++) {
+    const p = line[i];
+    const q = line[i + 1];
+    const len = Math.hypot(q.x - p.x, q.z - p.z);
+    if (len < 0.05) continue;
+    const nx = -(q.z - p.z) / len;
+    const nz = (q.x - p.x) / len;
+    const vi = b.pos.length / 3;
+    b.pos.push(p.x, yBot[i], p.z, q.x, yBot[i + 1], q.z, q.x, yTop[i + 1], q.z, p.x, yTop[i], p.z);
+    for (let k = 0; k < 4; k++) b.nor.push(nx, 0, nz);
+    b.uv.push(cum / 4, 0, (cum + len) / 4, 0, (cum + len) / 4, 1, cum / 4, 1);
+    b.idx.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3);
+    cum += len;
   }
 }
 
@@ -430,17 +684,24 @@ function addKerbArcs(
 
 /** Split a polyline into runs of consecutive non-flagged vertices. */
 function splitRuns(line: V2[], bad: boolean[]): V2[][] {
-  const runs: V2[][] = [];
+  return splitRunsIdx(line, bad).map((r) => r.pts);
+}
+
+/** Like splitRuns, but keeps each run's start index (profile alignment). */
+function splitRunsIdx(line: V2[], bad: boolean[]): { pts: V2[]; start: number }[] {
+  const runs: { pts: V2[]; start: number }[] = [];
   let cur: V2[] = [];
+  let start = 0;
   for (let i = 0; i < line.length; i++) {
     if (bad[i]) {
-      if (cur.length >= 2) runs.push(cur);
+      if (cur.length >= 2) runs.push({ pts: cur, start });
       cur = [];
     } else {
+      if (cur.length === 0) start = i;
       cur.push(line[i]);
     }
   }
-  if (cur.length >= 2) runs.push(cur);
+  if (cur.length >= 2) runs.push({ pts: cur, start });
   return runs;
 }
 

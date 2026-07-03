@@ -203,6 +203,7 @@ export interface SharedMaterials {
   path: THREE.MeshStandardMaterial;
   sidewalk: THREE.MeshStandardMaterial;
   crosswalk: THREE.MeshStandardMaterial;
+  barrier: THREE.MeshStandardMaterial;
   grass: THREE.MeshStandardMaterial;
   forest: THREE.MeshStandardMaterial;
   sand: THREE.MeshStandardMaterial;
@@ -253,6 +254,8 @@ export function getMaterials(): SharedMaterials {
       map: crossTex, transparent: true, depthWrite: false, polygonOffset: true,
       polygonOffsetFactor: -2, polygonOffsetUnits: -2, roughness: 0.9,
     }),
+    // bridge parapets, viaduct piers, underpass retaining walls (concrete)
+    barrier: new THREE.MeshStandardMaterial({ color: 0xaaa69d, roughness: 0.95, side: THREE.DoubleSide }),
     grass: new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1 }),
     forest: new THREE.MeshStandardMaterial({ map: forestTex, roughness: 1 }),
     sand: new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }),

@@ -4,7 +4,7 @@ import { CONFIG } from '../config';
 import { getMaterials } from '../world/materials';
 import { RoadGraph, GraphEdge } from './graph';
 
-const CAR_COLORS = [
+export const CAR_COLORS = [
   0xdedede, 0xb8bcc2, 0x2e3338, 0x8a1f24, 0x1f3f6e, 0x3d5a3f, 0xc7b299, 0x74797f, 0xe8e6e0, 0x50261f,
 ].map((c) => new THREE.Color(c));
 
@@ -21,7 +21,8 @@ export type SignalQuery = (pos: THREE.Vector3, dir: THREE.Vector3) => number;
 
 let carGeo: THREE.BufferGeometry | undefined;
 
-function getCarGeometry(): THREE.BufferGeometry {
+/** Shared low-poly car geometry — moving traffic AND parked cars use it. */
+export function getCarGeometry(): THREE.BufferGeometry {
   if (carGeo) return carGeo;
   const body = new THREE.BoxGeometry(1.75, 0.52, 4.0);
   body.translate(0, 0.55, 0);
@@ -52,6 +53,9 @@ function paint(g: THREE.BufferGeometry, r: number, gr: number, b: number): void 
 /** Simple traffic: cars roam the drivable graph, picking random turns at nodes. */
 export class VehicleSystem {
   mesh: THREE.InstancedMesh;
+  /** global traffic multiplier — hook for live congestion feeds (Faz 6):
+   * red roads from a traffic API can push this (or per-road weights) up */
+  densityScale = 1;
   private cars: Car[] = [];
   private tmpPos = new THREE.Vector3();
   private tmpDir = new THREE.Vector3();
@@ -74,6 +78,7 @@ export class VehicleSystem {
       this.mesh.setMatrixAt(i, this.tmpM);
     }
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.mesh.userData.cat = 'vehicles';
     scene.add(this.mesh);
   }
 
@@ -81,8 +86,19 @@ export class VehicleSystem {
     for (const c of this.cars) c.edge = null;
   }
 
+  setDensity(f: number): void {
+    this.densityScale = Math.min(Math.max(f, 0), 4);
+  }
+
+  /** Inspector: live state of a car instance. */
+  carInfo(i: number): { speed: number; cruise: number; highway?: string } | null {
+    const c = this.cars[i];
+    if (!c || !c.edge) return null;
+    return { speed: c.v, cruise: c.speed, highway: c.edge.highway };
+  }
+
   update(dt: number, camPos: THREE.Vector3, graph: RoadGraph, signalAhead?: SignalQuery): void {
-    const target = Math.min(CONFIG.maxVehicles, Math.floor(graph.totalLength / 90));
+    const target = Math.min(CONFIG.maxVehicles, Math.floor((graph.totalLength / 90) * this.densityScale));
     let activeCount = 0;
 
     // per-edge occupancy for car-following (leader gap)

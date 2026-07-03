@@ -44,6 +44,26 @@ await page.evaluate(() => window.__twinio.place(40, 70, 40, -0.85, 0.6));
 await new Promise((r) => setTimeout(r, 2500));
 await page.screenshot({ path: `${SHOT_DIR}/world-street.png` });
 
+// inspector API: probe a few points until one returns real features
+const insp = await page.evaluate(() => {
+  for (const [x, z] of [[0, 0], [80, 40], [-120, 90], [200, -150], [-300, 250]]) {
+    const r = window.__twinio.inspect(x, z);
+    if (r.building || r.roads.length || r.areas.length) {
+      return {
+        at: [x, z],
+        building: r.building ? r.building.id : null,
+        roads: r.roads.map((q) => q.spec.highway),
+        junction: !!r.junction,
+        areas: r.areas.map((a) => a.kind),
+        poi: r.poi ? r.poi.kind : null,
+        lot: r.lot ? r.lot.occupancy : null,
+      };
+    }
+  }
+  return null;
+});
+console.log('INSPECT::' + JSON.stringify(insp));
+
 // night aerial
 await page.evaluate(() => {
   window.__twinio.setHour(22);

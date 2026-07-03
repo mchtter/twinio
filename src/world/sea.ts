@@ -121,23 +121,38 @@ function clipChains(line: V2[], r: TileRect): Chain[] {
 }
 
 /** Consecutive coastline WAYS share endpoints mid-tile — stitch them into
- * long polylines first, otherwise chains end inside the rect and get dropped. */
+ * long polylines first, otherwise chains end inside the rect and get dropped.
+ * Merging must start from chain HEADS (a start no other way ends at): seeding
+ * from an arbitrary way would consume downstream pieces before their upstream
+ * neighbour gets to attach them, splitting one shore into dead mid-tile chains. */
 function stitchCoastlines(lines: V2[][]): V2[][] {
   const key = (p: V2) => `${Math.round(p.x * 2)}_${Math.round(p.z * 2)}`;
-  const byStart = new Map<string, V2[]>();
-  for (const l of lines) {
-    if (l.length >= 2) byStart.set(key(l[0]), l.slice());
+  const valid = lines.filter((l) => l.length >= 2).map((l) => l.slice());
+  const byStart = new Map<string, V2[][]>();
+  const endKeys = new Set<string>();
+  for (const l of valid) {
+    const k = key(l[0]);
+    let arr = byStart.get(k);
+    if (!arr) {
+      arr = [];
+      byStart.set(k, arr);
+    }
+    arr.push(l);
+    endKeys.add(key(l[l.length - 1]));
   }
   const used = new Set<V2[]>();
   const out: V2[][] = [];
-  for (const l of byStart.values()) {
-    if (used.has(l)) continue;
-    used.add(l);
-    const merged = l.slice();
+  // heads first; leftovers (closed loops) become their own seeds afterwards
+  const seeds = valid.filter((l) => !endKeys.has(key(l[0]))).concat(valid);
+  for (const seed of seeds) {
+    if (used.has(seed)) continue;
+    used.add(seed);
+    const merged = seed.slice();
     let guard = 0;
-    while (guard++ < 200) {
-      const next = byStart.get(key(merged[merged.length - 1]));
-      if (!next || used.has(next) || next === l) break;
+    while (guard++ < 300) {
+      const cands = byStart.get(key(merged[merged.length - 1]));
+      const next = cands?.find((c) => !used.has(c));
+      if (!next) break;
       used.add(next);
       merged.push(...next.slice(1));
     }
@@ -146,8 +161,15 @@ function stitchCoastlines(lines: V2[][]): V2[][] {
   return out;
 }
 
+export interface SeaResult {
+  mesh: THREE.Mesh;
+  /** water polygons in world coords — the terrain under them is pressed down
+   * (radar DSM is meters-noisy over straits/bays and would poke through) */
+  polys: V2[][];
+}
+
 /** Build the sea mesh for a tile from its coastline ways (or null if none). */
-export function buildSea(coastlines: V2[][], rect: TileRect, sample: HeightSampler): THREE.Mesh | null {
+export function buildSea(coastlines: V2[][], rect: TileRect, sample: HeightSampler): SeaResult | null {
   const chains: Chain[] = [];
   for (const line of stitchCoastlines(coastlines)) {
     chains.push(...clipChains(line, rect));
@@ -224,11 +246,11 @@ export function buildSea(coastlines: V2[][], rect: TileRect, sample: HeightSampl
     }
   }
   if (geos.length === 0) return null;
-  return seaMeshFromGeos(geos);
+  return { mesh: seaMeshFromGeos(geos), polys: polygons };
 }
 
 /** Flat full-tile sea quad (open-sea tiles detected via the DEM heuristic). */
-export function buildOpenSea(rect: TileRect): THREE.Mesh {
+export function buildOpenSea(rect: TileRect): SeaResult {
   const g = new THREE.BufferGeometry();
   const y = CONFIG.seaLevel;
   const pos = new Float32Array([
@@ -245,7 +267,15 @@ export function buildOpenSea(rect: TileRect): THREE.Mesh {
   const nor = new Float32Array(18);
   for (let i = 0; i < 6; i++) nor[i * 3 + 1] = 1;
   g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  return seaMeshFromGeos([g]);
+  return {
+    mesh: seaMeshFromGeos([g]),
+    polys: [[
+      { x: rect.xMin, z: rect.zMin },
+      { x: rect.xMax, z: rect.zMin },
+      { x: rect.xMax, z: rect.zMax },
+      { x: rect.xMin, z: rect.zMax },
+    ]],
+  };
 }
 
 function seaMeshFromGeos(geos: THREE.BufferGeometry[]): THREE.Mesh {

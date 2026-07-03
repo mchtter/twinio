@@ -6,6 +6,7 @@ export interface HudCallbacks {
   onSearch: (query: string) => void;
   onLockRequest: () => void;
   onShadowToggle: (on: boolean) => void;
+  onInspectorClose?: () => void;
 }
 
 const LAYERS: [string, string][] = [
@@ -54,9 +55,13 @@ export class Hud {
         </div>
       </div>
       <div id="hud-help" class="hud panel">
-        Mod: <b id="mode-label">izometrik</b> · <b>F</b> mod değiştir · <b>sürükle</b> kaydır · <b>sağ tık / Q·E</b> döndür · <b>tekerlek</b> zoom · <b>WASD</b> hareket · <b>Shift</b> hızlı
+        Mod: <b id="mode-label">izometrik</b> · <b>tık</b> incele · <b>F</b> mod değiştir · <b>sürükle</b> kaydır · <b>sağ tık / Q·E</b> döndür · <b>tekerlek</b> zoom · <b>WASD</b> hareket · <b>Shift</b> hızlı
       </div>
       <div id="hud-toast" class="hud hidden"></div>
+      <div id="inspector" class="hud panel hidden">
+        <button id="inspector-close" title="Kapat">×</button>
+        <div id="inspector-body"></div>
+      </div>
       <div id="lock-overlay" class="hidden">
         <div class="inner"><b>Yürüme Modu</b><br/><br/>Bakışı kilitlemek için tıkla<br/><span style="font-size:12px;color:#8fa0b8">fare ile bak · WASD ile yürü · ESC imleci bırakır · F izometrik görünüme döner</span></div>
       </div>
@@ -104,6 +109,18 @@ export class Hud {
     });
 
     this.lockOverlay.addEventListener('click', () => cb.onLockRequest());
+    document.getElementById('inspector-close')!.addEventListener('click', () => this.hideInspector());
+  }
+
+  /** Click-to-inspect modal (debug: OSM tags + engine decisions). */
+  showInspector(html: string): void {
+    document.getElementById('inspector-body')!.innerHTML = html;
+    document.getElementById('inspector')!.classList.remove('hidden');
+  }
+
+  hideInspector(): void {
+    document.getElementById('inspector')!.classList.add('hidden');
+    this.cb.onInspectorClose?.();
   }
 
   setHourFromUrl(h: number): void {

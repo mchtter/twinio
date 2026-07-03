@@ -6,12 +6,16 @@ import { pointInPolygon, polygonAreaAbs, ringBBox, seededRandom, hashStr, refine
 import { getMaterials } from './materials';
 import { FootprintGrid } from './collision';
 
-/** Green/water/parking area polygons draped onto the terrain + instanced trees. */
+/** Green/water/parking area polygons draped onto the terrain + instanced trees.
+ * `cutDepth` reports tunnel-trench depth: triangles over an open trench are
+ * dropped so no tinted lid floats above an underpass. */
 export function buildAreas(
   areas: AreaSpec[],
   treePois: PoiSpec[],
   sample: HeightSampler,
   footprints?: FootprintGrid,
+  cutDepth?: (x: number, z: number) => number,
+  isWater?: (x: number, z: number) => boolean,
 ): { areas: THREE.Object3D | null; trees: THREE.Object3D | null } {
   const geoBuckets: Record<string, THREE.BufferGeometry[]> = {
     grass: [], forest: [], sand: [], parking: [], water: [], zone: [],
@@ -20,7 +24,7 @@ export function buildAreas(
 
   for (const a of areas) {
     if (a.outer.length < 3) continue;
-    const geo = polygonGeometry(a, sample);
+    const geo = polygonGeometry(a, sample, cutDepth, isWater);
     if (geo && a.kind === 'zone') {
       // landuse tint via vertex colors (single merged mesh, one material)
       const c = a.zoneColor ?? [0.68, 0.66, 0.62];
@@ -86,7 +90,12 @@ export function buildAreas(
   };
 }
 
-function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeometry | null {
+function polygonGeometry(
+  a: AreaSpec,
+  sample: HeightSampler,
+  cutDepth?: (x: number, z: number) => number,
+  isWater?: (x: number, z: number) => boolean,
+): THREE.BufferGeometry | null {
   const shape = new THREE.Shape();
   shape.moveTo(a.outer[0].x, -a.outer[0].z);
   for (let i = 1; i < a.outer.length; i++) shape.lineTo(a.outer[i].x, -a.outer[i].z);
@@ -117,7 +126,29 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
   const area = polygonAreaAbs(a.outer);
   // adapt threshold so a huge forest can't explode the vertex budget (~20k tris)
   const threshold = Math.max(16, Math.sqrt((2 * area) / 20000));
-  const out = refineTrianglesXZ(src, threshold);
+  let out = refineTrianglesXZ(src, threshold);
+
+  // engine rules: never float a tinted lid over an open underpass trench, and
+  // never drape land tints over open water (broken zones spilling into the sea)
+  const overWater = (cx: number, cz: number): boolean => {
+    if (a.kind === 'water' || a.kind === 'sand') return false; // beaches/rivers belong at sea level
+    if (isWater?.(cx, cz)) return true;
+    // DSM snaps everything below ±0.8 m to exactly 0 — zone tint on true zero
+    // elevation is water in practice (sea polygons of not-yet-loaded tiles)
+    return a.kind === 'zone' && sample(cx, cz) <= 0.01;
+  };
+  if (cutDepth || isWater) {
+    const kept: number[] = [];
+    for (let t = 0; t + 5 < out.length; t += 6) {
+      const cx = (out[t] + out[t + 2] + out[t + 4]) / 3;
+      const cz = (out[t + 1] + out[t + 3] + out[t + 5]) / 3;
+      if (cutDepth && cutDepth(cx, cz) > 0.5) continue;
+      if (overWater(cx, cz)) continue;
+      kept.push(out[t], out[t + 1], out[t + 2], out[t + 3], out[t + 4], out[t + 5]);
+    }
+    if (kept.length !== out.length) out = kept;
+    if (out.length === 0) return null;
+  }
 
   // overlapping OSM areas (e.g. park + grass duplicates) get distinct offsets;
   // landuse zones live in their own lower band so greens always win on top

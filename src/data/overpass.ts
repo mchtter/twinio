@@ -203,13 +203,40 @@ function parseHeight(tags: Record<string, string>, id: number, kind: string): nu
   return b * (0.75 + hash01(id) * 0.6);
 }
 
-function parseRoof(tags: Record<string, string>): { roofShape?: 'flat' | 'gabled'; roofHeight?: number } {
+function parseRoof(tags: Record<string, string>): {
+  roofShape?: 'flat' | 'gabled' | 'hipped' | 'pyramidal';
+  roofHeight?: number;
+  wallColour?: string;
+  roofColour?: string;
+} {
   const shape = tags['roof:shape'];
   const h = parseFloat(tags['roof:height'] ?? '');
+  const mapped =
+    shape === 'gabled' ? 'gabled'
+    : shape === 'hipped' || shape === 'half-hipped' || shape === 'gambrel' || shape === 'mansard' ? 'hipped'
+    : shape === 'pyramidal' || shape === 'dome' || shape === 'onion' ? 'pyramidal'
+    : shape ? 'flat'
+    : undefined;
   return {
-    roofShape: shape === 'gabled' || shape === 'hipped' ? 'gabled' : shape ? 'flat' : undefined,
+    roofShape: mapped,
     roofHeight: isFinite(h) && h > 0 ? Math.min(h, 12) : undefined,
+    wallColour: tags['building:colour'],
+    roofColour: tags['roof:colour'],
   };
+}
+
+/** Effective vertical level of a way: bridges live at ≥1, tunnels at ≤-1. */
+function parseLevel(tags: Record<string, string>): { bridge: boolean; tunnel: boolean; level: number } {
+  const layer = parseInt(tags['layer'] ?? '0', 10) || 0;
+  const bridge = tags['bridge'] !== undefined && tags['bridge'] !== 'no';
+  const tunnel = (tags['tunnel'] !== undefined && tags['tunnel'] !== 'no') || tags['covered'] === 'yes';
+  return { bridge, tunnel, level: bridge ? Math.max(layer, 1) : tunnel ? Math.min(layer, -1) : layer };
+}
+
+function polylineLen(pts: V2[]): number {
+  let l = 0;
+  for (let i = 1; i < pts.length; i++) l += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+  return l;
 }
 
 function multipolygonRings(el: OverpassElement, proj: GeoProjection): { outers: V2[][]; holes: V2[][] } {
@@ -251,7 +278,7 @@ export function parseTile(
       else if (tags['natural'] === 'tree') kind = 'tree';
       if (kind && claim(id)) {
         const w = proj.toWorld(el.lat, el.lon);
-        pois.push({ id, x: w.x, z: w.z, kind });
+        pois.push({ id, x: w.x, z: w.z, kind, tags });
       }
       continue;
     }
@@ -279,13 +306,13 @@ export function parseTile(
           kind: tags['building'],
           use: buildingUse(tags),
           ...parseRoof(tags),
+          tags,
         });
         continue;
       }
       // roads
       const hw = tags['highway'];
       if (hw && ROAD_DEFS[hw]) {
-        if (tags['tunnel'] === 'yes' || parseFloat(tags['layer'] ?? '0') < 0) continue;
         const def = ROAD_DEFS[hw];
         const lanes = parseFloat(tags['lanes'] ?? '');
         const width = isFinite(lanes) && lanes > 0 ? Math.max(def.width, lanes * 3.2) : def.width;
@@ -294,9 +321,14 @@ export function parseTile(
           return { x: w.x, z: w.z };
         });
         if (pts.length < 2) continue;
+        const lvl = parseLevel(tags);
+        // long mountain tunnels can't be shown as open trenches — skip them
+        // entirely (short underpasses/altgeçit are kept and carved)
+        if (lvl.tunnel && polylineLen(pts) > 500) continue;
         // rule geometry is claim-independent: clearance/junction rules must see
         // roads rendered by neighbouring tiles too
-        ruleRoads.push({ id, pts, width, cls: def.cls, sidewalks: def.sidewalks && tags['sidewalk'] !== 'no' });
+        const sidewalks = def.sidewalks && !lvl.tunnel && tags['sidewalk'] !== 'no';
+        ruleRoads.push({ id, pts, width, cls: def.cls, sidewalks, ...lvl });
         if (!claim(id)) continue;
         roads.push({
           id,
@@ -305,8 +337,10 @@ export function parseTile(
           width,
           highway: hw,
           oneway: tags['oneway'] === 'yes' || hw.startsWith('motorway'),
-          sidewalks: def.sidewalks && tags['sidewalk'] !== 'no',
-          lamps: def.lamps,
+          sidewalks,
+          lamps: def.lamps && !lvl.tunnel && !lvl.bridge,
+          ...lvl,
+          tags,
         });
         continue;
       }
@@ -317,7 +351,7 @@ export function parseTile(
           const outer = ringToLocal(el.geometry, proj);
           if (outer.length >= 3 && !(kind.kind === 'zone' && tooBigZone(outer))) {
             areas.push({
-              id, outer, holes: [], kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor,
+              id, outer, holes: [], kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor, tags,
             });
           }
         }
@@ -342,11 +376,12 @@ export function parseTile(
             kind: tags['building']!,
             use: buildingUse(tags),
             ...parseRoof(tags),
+            tags,
           });
         } else if (kind) {
           areas.push({
             id: subId, outer: outers[i], holes: myHoles,
-            kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor,
+            kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor, tags,
           });
         }
       }

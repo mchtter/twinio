@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import { CONFIG } from '../config';
 import { lon2tile, lat2tile, tileKey, tileBounds } from '../geo/proj';
 import { fetchOsmTile, parseTile } from '../data/overpass';
-import { TerrainManager } from '../terrain/terrain';
+import { TerrainManager, TerrainCut } from '../terrain/terrain';
 import { buildBuildings } from './buildings';
-import { buildRoads } from './roads';
+import { buildRoads, tunnelProfile } from './roads';
 import { buildAreas } from './greenery';
+import { buildParkedCars } from './parking';
 import { buildProps, TrafficSignalSet, SignalPoint, signalPhase } from './props';
 import { buildSea, buildOpenSea, TileRect } from './sea';
+import { FeatureIndex } from './featureIndex';
+import { subdividePolyline } from './geomUtils';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
 import { CollisionIndex, FootprintGrid, RoadClearanceGrid } from './collision';
@@ -38,6 +41,8 @@ export class World {
   // 24m grid hash of traffic signals for fast "red light ahead?" vehicle queries
   private signalCells = new Map<string, SignalPoint[]>();
   private loadingCount = 0;
+  /** click-to-inspect registry: raw specs + engine decisions per tile */
+  readonly features = new FeatureIndex();
   generation = 0;
   onStatus?: (loading: number, total: number) => void;
   onError?: (msg: string) => void;
@@ -151,10 +156,29 @@ export class World {
         return true;
       };
       const parsed = parseTile(elements, this.terrain.proj, claim);
-      const sample = this.terrain.sample;
+      // world geometry drapes on the PRISTINE surface: tunnel cuts only open
+      // the terrain mesh, so at-grade roads/areas bridge over the trench
+      const sample = this.terrain.sampleOriginal;
+      const sampleOrig = this.terrain.sampleOriginal;
       const group = new THREE.Group();
       group.name = `tile-${key}`;
       const light = mode === 'light';
+
+      // engine rule: underpass corridors carve the terrain BEFORE anything
+      // drapes on it — the trench floor and the tunnel road share one profile.
+      // ruleRoads is claim-independent; registerCuts dedupes by way id.
+      const cuts: TerrainCut[] = [];
+      for (const r of parsed.ruleRoads) {
+        if (!r.tunnel || r.pts.length < 2) continue;
+        const sub = subdividePolyline(r.pts, 12);
+        const prof = tunnelProfile(sub, r.id, parsed.ruleRoads, sample, sampleOrig);
+        cuts.push({
+          id: r.id,
+          pts: sub.map((p, i) => ({ x: p.x, z: p.z, y: prof[i] })),
+          halfWidth: r.width / 2 + 1.4,
+        });
+      }
+      if (cuts.length > 0) this.terrain.registerCuts(cuts);
 
       // light mode: no footpaths/sidewalks/crossings/trees/props/agents
       const roadSpecs = light
@@ -169,7 +193,7 @@ export class World {
       const footprints = new FootprintGrid(parsed.buildings);
       const clearance = new RoadClearanceGrid();
       for (const r of parsed.ruleRoads) {
-        if (r.cls !== 'path' && r.pts.length >= 2) clearance.add(r.id, r.pts, r.width / 2);
+        if (r.cls !== 'path' && r.pts.length >= 2) clearance.add(r.id, r.pts, r.width / 2, r.level);
       }
 
       // build in slices with frame yields to avoid long main-thread stalls
@@ -178,35 +202,72 @@ export class World {
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const roads = buildRoads(roadSpecs, poiSpecs, sample, footprints, clearance, parsed.ruleRoads, claim);
+      const roads = buildRoads(
+        roadSpecs, poiSpecs, sample, footprints, clearance, parsed.ruleRoads, claim, sampleOrig,
+      );
       if (roads.group) group.add(roads.group);
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
-      const areas = buildAreas(areaSpecs, poiSpecs, sample, footprints);
-      if (areas.areas) group.add(areas.areas);
-      if (areas.trees) group.add(areas.trees);
-
-      // sea: coastline → clipped polygon; else open-sea DEM heuristic
+      // sea BEFORE areas: registered water polygons stop land tints/zones from
+      // draping over open water. Coastline → clipped polygon; else DEM heuristic.
       const bounds = tileBounds(z, x, y);
       const nw = this.terrain.proj.toWorld(bounds.north, bounds.west);
       const se = this.terrain.proj.toWorld(bounds.south, bounds.east);
       const rect: TileRect = { xMin: nw.x, xMax: se.x, zMin: nw.z, zMax: se.z };
       let sea = buildSea(parsed.coastlines, rect, sample);
-      if (!sea && elements.length < 5) {
-        let maxH = 0;
+      // open-water heuristic: no coastline in THIS tile, nothing ground-bound
+      // (bridges spanning the strait and zones spilling over it don't count)
+      // and the DEM is near zero. Catches mid-strait/bay tiles whose
+      // coastlines lie in neighbour tiles.
+      const grounded =
+        parsed.buildings.length > 0 ||
+        parsed.areas.some((a) => a.kind !== 'zone') ||
+        parsed.roads.some((r) => !r.bridge && !r.tunnel);
+      if (!sea && parsed.coastlines.length === 0 && !grounded) {
+        const hs: number[] = [];
         for (let sy = 0; sy <= 2; sy++) {
           for (let sx = 0; sx <= 2; sx++) {
-            const h = Math.abs(sample(rect.xMin + ((rect.xMax - rect.xMin) * sx) / 2, rect.zMin + ((rect.zMax - rect.zMin) * sy) / 2));
-            if (h > maxH) maxH = h;
+            hs.push(Math.abs(sampleOrig(
+              rect.xMin + ((rect.xMax - rect.xMin) * sx) / 2,
+              rect.zMin + ((rect.zMax - rect.zMin) * sy) / 2,
+            )));
           }
         }
-        if (maxH < 0.5) sea = buildOpenSea(rect); // flat at DEM zero + no data = open sea
+        hs.sort((a, b) => a - b);
+        // quantile: a bridge deck crossing the tile leaves its height in the
+        // DSM — one or two tall samples must not veto an otherwise flat-zero tile
+        if (hs[6] < 1.5) sea = buildOpenSea(rect);
       }
       if (sea) {
-        sea.visible = !this.hidden.has('water');
-        group.add(sea);
+        sea.mesh.visible = !this.hidden.has('water');
+        group.add(sea.mesh);
+        // engine rule: terrain under known water is pressed to the seabed —
+        // the noisy DSM water surface must never poke through the sea sheet
+        this.terrain.registerWaterAreas(`sea:${key}`, sea.polys);
       }
+
+      const areas = buildAreas(
+        areaSpecs, poiSpecs, sample, footprints, this.terrain.cutDepthAt, this.terrain.isWaterAt,
+      );
+      if (areas.areas) group.add(areas.areas);
+      if (areas.trees) group.add(areas.trees);
+
+      // parked cars fill amenity=parking lots (full-detail tiles only)
+      let lots: ReturnType<typeof buildParkedCars>['lots'] = [];
+      if (!light) {
+        const parking = buildParkedCars(parsed.areas, sample, footprints, clearance);
+        if (parking.mesh) group.add(parking.mesh);
+        lots = parking.lots;
+      }
+      this.features.addTile(key, {
+        buildings: parsed.buildings,
+        roads: parsed.roads,
+        areas: parsed.areas,
+        pois: parsed.pois,
+        junctions: roads.junctions,
+        lots,
+      });
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
@@ -292,6 +353,7 @@ export class World {
     this.graph.removeTile(key);
     this.pedestrians.removeTile(key);
     this.collision.removeTile(key);
+    this.features.removeTile(key);
     this.emitStatus();
   }
 

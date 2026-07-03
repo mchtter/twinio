@@ -7,13 +7,41 @@ import { getMaterials, FACADE_METERS } from './materials';
 const WALL_PALETTE = [
   0xd9cfc0, 0xc9c2b8, 0xd8d2c9, 0xcbb8a4, 0xbfb9ae, 0xd3c6ae, 0xc2beb2, 0xd6cdbb,
   0xd0b9a0, 0xc5cdd2, 0xb8beb2, 0xdad5c5,
+  // stronger urban hues (salmon, ochre, blue-gray, pale green) — Turkish
+  // apartment stock is far from uniform beige
+  0xd9b8a2, 0xc9a98c, 0xb9c4c9, 0xd6c489, 0xc9d1c6, 0xc7b9a8,
 ].map((c) => new THREE.Color(c));
 
-const ROOF_FLAT = new THREE.Color(0x8a857c);
 const ROOF_TILE = new THREE.Color(0x9a5f47);
+// flat/large roofs: grays, browns, occasional weathered green
+const ROOF_PALETTE = [
+  0x8a857c, 0x77685a, 0x6f7780, 0x8a4f3d, 0xa06a50, 0x5f6b60, 0x7d7468,
+].map((c) => new THREE.Color(c));
 
 // kinds that get a gabled roof by default (when footprint is a simple quad)
 const GABLE_KINDS = new Set(['house', 'detached', 'semidetached_house', 'bungalow', 'farm', 'cabin']);
+
+/** Parse an OSM colour tag (hex or CSS name) without console warnings.
+ * Saturation/lightness are clamped so mapper-picked neon stays plausible. */
+const colourCache = new Map<string, THREE.Color | null>();
+let colourProbe: HTMLSpanElement | undefined;
+function cssColour(s?: string): THREE.Color | null {
+  if (!s) return null;
+  const cached = colourCache.get(s);
+  if (cached !== undefined) return cached;
+  if (!colourProbe) colourProbe = document.createElement('span');
+  colourProbe.style.color = '';
+  colourProbe.style.color = s;
+  let out: THREE.Color | null = null;
+  if (colourProbe.style.color) {
+    out = new THREE.Color(colourProbe.style.color);
+    const hsl = { h: 0, s: 0, l: 0 };
+    out.getHSL(hsl);
+    out.setHSL(hsl.h, Math.min(hsl.s, 0.55), Math.min(Math.max(hsl.l, 0.25), 0.85));
+  }
+  colourCache.set(s, out);
+  return out;
+}
 
 /** Visual identity per canonical building use. `plain` = windowless facade. */
 interface UseStyle {
@@ -51,11 +79,20 @@ export function buildBuildings(specs: BuildingSpec[], sample: HeightSampler): TH
     const style = USE_STYLES[b.use];
     const w = style?.plain ? plain : windowed;
     const wPos = w.pos, wNor = w.nor, wUv = w.uv, wCol = w.col, wIdx = w.idx;
-    const wallColor = style
-      ? style.walls[Math.floor(rng() * style.walls.length)]
-      : WALL_PALETTE[Math.floor(rng() * WALL_PALETTE.length)];
+    // real mapped colours win; then use styles; then the procedural palette
+    const tagWall = cssColour(b.wallColour);
+    const tagRoof = cssColour(b.roofColour);
+    const wallColor =
+      tagWall ??
+      (style
+        ? style.walls[Math.floor(rng() * style.walls.length)]
+        : WALL_PALETTE[Math.floor(rng() * WALL_PALETTE.length)]);
     const roofColor = (
-      style?.roof ?? (b.kind === 'house' || b.kind === 'detached' || b.height < 8 ? ROOF_TILE : ROOF_FLAT)
+      tagRoof ??
+      style?.roof ??
+      (b.kind === 'house' || b.kind === 'detached' || b.height < 8
+        ? ROOF_TILE
+        : ROOF_PALETTE[Math.floor(rng() * ROOF_PALETTE.length)])
     )
       .clone()
       .offsetHSL(0, 0, (rng() - 0.5) * 0.06);
@@ -77,16 +114,37 @@ export function buildBuildings(specs: BuildingSpec[], sample: HeightSampler): TH
       addWallRing(ring, base, top, wallColor, wPos, wNor, wUv, wCol, wIdx);
     }
 
-    const wantsGable = b.roofShape === 'gabled' || (b.roofShape === undefined && GABLE_KINDS.has(b.kind));
-    if (wantsGable && outer.length === 4 && holes.length === 0) {
+    // roof shape: mapped tag first, then defaults, then procedural variety —
+    // low residential quads split into gabled/hipped/flat so streets don't
+    // read as endless identical flat boxes
+    const isQuad = outer.length === 4 && holes.length === 0;
+    let roofKind = b.roofShape;
+    if (roofKind === undefined) {
+      if (GABLE_KINDS.has(b.kind)) roofKind = 'gabled';
+      else if (isQuad && !style && b.height < 17) {
+        const roll = rng();
+        roofKind = roll < 0.3 ? 'gabled' : roll < 0.48 ? 'hipped' : 'flat';
+      }
+    }
+    if ((roofKind === 'gabled' || roofKind === 'hipped') && isQuad) {
       const roofH = Math.min(b.roofHeight ?? 2.6, Math.max(1.2, b.height * 0.6));
-      const tileColor = ROOF_TILE.clone().offsetHSL(0, 0, (rng() - 0.5) * 0.06);
-      const gabled = buildGabledRoof(outer, top, roofH, tileColor, wallColor, wPos, wNor, wUv, wCol, wIdx);
-      if (gabled) {
-        roofGeos.push(gabled);
+      const tileColor = (tagRoof ?? ROOF_TILE).clone().offsetHSL(0, 0, (rng() - 0.5) * 0.06);
+      const pitched = buildPitchedRoof(
+        outer, top, roofH, tileColor, wallColor, roofKind === 'hipped', wPos, wNor, wUv, wCol, wIdx,
+      );
+      if (pitched) {
+        roofGeos.push(pitched);
         continue;
       }
       // degenerate quad → fall through to flat roof
+    }
+    if (roofKind === 'pyramidal' && holes.length === 0 && outer.length <= 10) {
+      const roofH = Math.min(b.roofHeight ?? 3.2, Math.max(1.5, b.height * 0.7));
+      const pyramid = buildPyramidRoof(outer, top, roofH, roofColor);
+      if (pyramid) {
+        roofGeos.push(pyramid);
+        continue;
+      }
     }
 
     // flat roof via ShapeGeometry in (x, north) space
@@ -155,15 +213,16 @@ export function buildBuildings(specs: BuildingSpec[], sample: HeightSampler): TH
   return group.children.length > 0 ? group : null;
 }
 
-/** Gabled roof over a CCW quad footprint: two slope quads (roof color) + two
- * gable triangles appended to the wall arrays (wall color). Returns the slope
- * geometry (non-indexed: position/normal/color) or null when degenerate. */
-function buildGabledRoof(
+/** Pitched roof over a CCW quad footprint.
+ * Gabled: two slope quads + two gable wall triangles (wall color).
+ * Hipped: ridge ends pulled inward, the short ends become roof triangles. */
+function buildPitchedRoof(
   quad: { x: number; z: number }[],
   top: number,
   roofH: number,
   roofColor: THREE.Color,
   wallColor: THREE.Color,
+  hipped: boolean,
   wPos: number[],
   wNor: number[],
   wUv: number[],
@@ -175,39 +234,52 @@ function buildGabledRoof(
   // rotate so edges 0 and 2 are the long (eave) sides; ridge spans the short ends
   const r = len(0) + len(2) >= len(1) + len(3) ? quad : [quad[1], quad[2], quad[3], quad[0]];
   const [a, b, c, d] = r;
-  const m1 = { x: (b.x + c.x) / 2, z: (b.z + c.z) / 2 }; // ridge end over edge b→c
-  const m3 = { x: (d.x + a.x) / 2, z: (d.z + a.z) / 2 }; // ridge end over edge d→a
+  let m1 = { x: (b.x + c.x) / 2, z: (b.z + c.z) / 2 }; // ridge end over edge b→c
+  let m3 = { x: (d.x + a.x) / 2, z: (d.z + a.z) / 2 }; // ridge end over edge d→a
+  if (hipped) {
+    // classic ~45° hip: pull each ridge end inward by half the end width
+    const ridge = Math.hypot(m1.x - m3.x, m1.z - m3.z);
+    if (ridge < 1e-6) return null;
+    const dx = (m3.x - m1.x) / ridge;
+    const dz = (m3.z - m1.z) / ridge;
+    const pull1 = Math.min(Math.hypot(c.x - b.x, c.z - b.z) / 2, ridge * 0.44);
+    const pull3 = Math.min(Math.hypot(a.x - d.x, a.z - d.z) / 2, ridge * 0.44);
+    m1 = { x: m1.x + dx * pull1, z: m1.z + dz * pull1 };
+    m3 = { x: m3.x - dx * pull3, z: m3.z - dz * pull3 };
+  }
   const yr = top + roofH;
 
   const pos: number[] = [];
   const nor: number[] = [];
   const col: number[] = [];
-  const quadFace = (
-    p0: [number, number, number],
-    p1: [number, number, number],
-    p2: [number, number, number],
-    p3: [number, number, number],
-  ) => {
+  const face = (pts: [number, number, number][]) => {
+    const [p0, p1, , pl] = [pts[0], pts[1], pts[2], pts[pts.length - 1]];
     const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
-    const vx = p3[0] - p0[0], vy = p3[1] - p0[1], vz = p3[2] - p0[2];
+    const vx = pl[0] - p0[0], vy = pl[1] - p0[1], vz = pl[2] - p0[2];
     let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const nl = Math.hypot(nx, ny, nz) || 1;
     nx /= nl; ny /= nl; nz /= nl;
-    for (const p of [p0, p1, p2, p0, p2, p3]) {
+    const tris = pts.length === 3 ? [pts[0], pts[1], pts[2]] : [pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]];
+    for (const p of tris) {
       pos.push(p[0], p[1], p[2]);
       nor.push(nx, ny, nz);
       col.push(roofColor.r, roofColor.g, roofColor.b);
     }
   };
   // slope over eave a→b and slope over eave c→d (winding keeps normals up+outward)
-  quadFace([a.x, top, a.z], [b.x, top, b.z], [m1.x, yr, m1.z], [m3.x, yr, m3.z]);
-  quadFace([c.x, top, c.z], [d.x, top, d.z], [m3.x, yr, m3.z], [m1.x, yr, m1.z]);
+  face([[a.x, top, a.z], [b.x, top, b.z], [m1.x, yr, m1.z], [m3.x, yr, m3.z]]);
+  face([[c.x, top, c.z], [d.x, top, d.z], [m3.x, yr, m3.z], [m1.x, yr, m1.z]]);
 
-  // gable triangles fill the wall above the short ends: (b,c,m1) and (d,a,m3)
   for (const [p, q, m] of [
     [b, c, m1],
     [d, a, m3],
   ] as const) {
+    if (hipped) {
+      // hip end: a roof triangle instead of a gable wall
+      face([[p.x, top, p.z], [q.x, top, q.z], [m.x, yr, m.z]]);
+      continue;
+    }
+    // gable triangles fill the wall above the short ends: (b,c,m1) and (d,a,m3)
     const dx = q.x - p.x, dz = q.z - p.z;
     const l = Math.hypot(dx, dz);
     if (l < 1e-6) continue;
@@ -222,6 +294,52 @@ function buildGabledRoof(
     wIdx.push(vi, vi + 1, vi + 2);
   }
 
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return geo;
+}
+
+/** Pyramidal roof: triangle fan from every outer edge to an apex over the
+ * footprint centroid (mosques, kiosks, towers — roof:shape=pyramidal/dome). */
+function buildPyramidRoof(
+  ring: { x: number; z: number }[],
+  top: number,
+  roofH: number,
+  roofColor: THREE.Color,
+): THREE.BufferGeometry | null {
+  let cx = 0, cz = 0;
+  for (const p of ring) {
+    cx += p.x;
+    cz += p.z;
+  }
+  cx /= ring.length;
+  cz /= ring.length;
+  const apex: [number, number, number] = [cx, top + roofH, cz];
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const col: number[] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    const ux = q.x - p.x, uz = q.z - p.z;
+    const vx = apex[0] - p.x, vy = roofH, vz = apex[2] - p.z;
+    // n = (q-p) × (apex-p); flip inward-facing normals up/outward
+    let nx = -uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy;
+    if (ny < 0) {
+      nx = -nx; ny = -ny; nz = -nz;
+    }
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    for (const v of [[p.x, top, p.z], [q.x, top, q.z], apex] as const) {
+      pos.push(v[0], v[1], v[2]);
+      nor.push(nx / nl, ny / nl, nz / nl);
+      col.push(roofColor.r, roofColor.g, roofColor.b);
+    }
+  }
+  if (pos.length < 9) return null;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));

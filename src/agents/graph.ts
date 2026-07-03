@@ -14,6 +14,7 @@ export interface GraphEdge {
   b: string;
   speed: number;
   oneway: boolean;
+  highway: string;
 }
 
 const SPEEDS: Record<string, number> = {
@@ -55,6 +56,7 @@ export class RoadGraph {
         b: nodeKey(d.pts[d.pts.length - 1]),
         speed: SPEEDS[d.highway] ?? 8,
         oneway: d.oneway,
+        highway: d.highway,
       };
       this.edges.set(edge.id, edge);
       ids.push(edge.id);
@@ -134,7 +136,11 @@ export class RoadGraph {
       const mid = e.pts[Math.floor(e.pts.length / 2)];
       const dx = mid.x - pos.x;
       const dz = mid.z - pos.z;
-      if (dx * dx + dz * dz < radius * radius) candidates.push(e);
+      if (dx * dx + dz * dz < radius * radius) {
+        candidates.push(e);
+        // arterials carry more traffic — double spawn weight for fast roads
+        if (e.speed >= 13) candidates.push(e);
+      }
     }
     if (candidates.length === 0) return null;
     return candidates[Math.floor(rnd() * candidates.length)];

@@ -49,6 +49,7 @@ interface ClearSeg {
   bz: number;
   hw: number; // carriageway half-width
   id: string; // owning road id (excluded when testing its own sidewalk/lamps)
+  lvl: number; // vertical level — a viaduct doesn't block sidewalks below it
 }
 
 /** Per-tile "is this point on/near a carriageway?" queries (grid hash).
@@ -59,9 +60,9 @@ export class RoadClearanceGrid {
   private static PAD = 2.5; // max query margin supported
   private cells = new Map<string, ClearSeg[]>();
 
-  add(id: string, pts: V2[], halfWidth: number): void {
+  add(id: string, pts: V2[], halfWidth: number, lvl = 0): void {
     for (let i = 1; i < pts.length; i++) {
-      const s: ClearSeg = { ax: pts[i - 1].x, az: pts[i - 1].z, bx: pts[i].x, bz: pts[i].z, hw: halfWidth, id };
+      const s: ClearSeg = { ax: pts[i - 1].x, az: pts[i - 1].z, bx: pts[i].x, bz: pts[i].z, hw: halfWidth, id, lvl };
       const pad = halfWidth + RoadClearanceGrid.PAD;
       const minX = Math.floor((Math.min(s.ax, s.bx) - pad) / RoadClearanceGrid.CELL);
       const maxX = Math.floor((Math.max(s.ax, s.bx) + pad) / RoadClearanceGrid.CELL);
@@ -81,13 +82,13 @@ export class RoadClearanceGrid {
     }
   }
 
-  /** True when (x,z) is within `margin` of any carriageway not owned by excludeId. */
-  blocked(x: number, z: number, margin: number, excludeId?: string): boolean {
+  /** True when (x,z) is within `margin` of any same-level carriageway not owned by excludeId. */
+  blocked(x: number, z: number, margin: number, excludeId?: string, lvl = 0): boolean {
     const key = `${Math.floor(x / RoadClearanceGrid.CELL)},${Math.floor(z / RoadClearanceGrid.CELL)}`;
     const arr = this.cells.get(key);
     if (!arr) return false;
     for (const s of arr) {
-      if (s.id === excludeId) continue;
+      if (s.id === excludeId || s.lvl !== lvl) continue;
       const abx = s.bx - s.ax;
       const abz = s.bz - s.az;
       const l2 = abx * abx + abz * abz;

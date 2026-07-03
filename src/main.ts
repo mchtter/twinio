@@ -12,6 +12,7 @@ import { PedestrianSystem } from './agents/pedestrians';
 import { PlayerControls } from './core/controls';
 import { Environment } from './core/environment';
 import { Hud } from './ui/hud';
+import { renderInspectorHtml } from './ui/inspector';
 
 const params = new URLSearchParams(location.search);
 const startLat = parseFloat(params.get('lat') ?? '') || CONFIG.origin.lat;
@@ -60,8 +61,10 @@ const controls = new PlayerControls(camera, renderer.domElement, terrain.sample,
 const hud = new Hud({
   onHourChange: (h) => env.setHour(h),
   onLayerToggle: (cat, visible) => {
-    if (cat === 'vehicles') vehicles.mesh.visible = visible;
-    else if (cat === 'pedestrians') pedestrians.mesh.visible = visible;
+    if (cat === 'vehicles') {
+      vehicles.mesh.visible = visible;
+      world.setLayerVisible(cat, visible); // parked cars live in tile groups
+    } else if (cat === 'pedestrians') pedestrians.mesh.visible = visible;
     else world.setLayerVisible(cat, visible);
   },
   onSearch: async (q) => {
@@ -75,6 +78,9 @@ const hud = new Hud({
     await teleport(hit.lat, hit.lon);
   },
   onLockRequest: () => controls.requestLock(),
+  onInspectorClose: () => {
+    marker.visible = false;
+  },
   onShadowToggle: (on) => {
     renderer.shadowMap.enabled = on;
     // force material refresh
@@ -85,6 +91,80 @@ const hud = new Hud({
       }
     });
   },
+});
+
+// ---------- click-to-inspect (debug modal) ----------
+const marker = (() => {
+  const g = new THREE.RingGeometry(1.1, 1.6, 32);
+  g.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(
+    g,
+    new THREE.MeshBasicMaterial({ color: 0xffd479, transparent: true, opacity: 0.9, depthTest: false }),
+  );
+  m.renderOrder = 999;
+  m.visible = false;
+  scene.add(m);
+  return m;
+})();
+
+const raycaster = new THREE.Raycaster();
+
+function catOf(o: THREE.Object3D | null): string | undefined {
+  while (o) {
+    if (o.userData.cat) return o.userData.cat as string;
+    if (o.name.startsWith('terrain')) return 'terrain';
+    o = o.parent;
+  }
+  return undefined;
+}
+
+function chainVisible(o: THREE.Object3D | null): boolean {
+  while (o) {
+    if (!o.visible) return false;
+    o = o.parent;
+  }
+  return true;
+}
+
+function inspectAt(cx: number, cy: number): void {
+  const ndc = new THREE.Vector2((cx / window.innerWidth) * 2 - 1, -(cy / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  for (const hit of raycaster.intersectObjects(scene.children, true)) {
+    if (hit.object === marker || !chainVisible(hit.object)) continue;
+    const cat = catOf(hit.object);
+    if (!cat) continue;
+    const p = hit.point;
+    const geo = proj.toGeo(p.x, p.z);
+    const vehicle =
+      cat === 'vehicles' && hit.object === vehicles.mesh && hit.instanceId !== undefined
+        ? vehicles.carInfo(hit.instanceId)
+        : null;
+    const res = world.features.query(p.x, p.z);
+    hud.showInspector(
+      renderInspectorHtml(res, {
+        lat: geo.lat, lon: geo.lon, x: p.x, z: p.z,
+        terrain: terrain.sample(p.x, p.z), cat, vehicle,
+      }),
+    );
+    marker.position.set(p.x, p.y + 0.4, p.z);
+    marker.visible = true;
+    return;
+  }
+}
+
+// a click is a press+release without drag (iso mode keeps the cursor free)
+let downX = 0;
+let downY = 0;
+let downOk = false;
+renderer.domElement.addEventListener('mousedown', (e) => {
+  downOk = e.button === 0;
+  downX = e.clientX;
+  downY = e.clientY;
+});
+renderer.domElement.addEventListener('mouseup', (e) => {
+  if (!downOk || e.button !== 0 || controls.isLocked) return;
+  if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) return;
+  inspectAt(e.clientX, e.clientY);
 });
 
 // lock overlay is only relevant in walk mode while the pointer is free
@@ -199,4 +279,8 @@ loop();
     camera.position.set(x, y, z);
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
   },
+  // click-to-inspect from code (e2e + console debugging)
+  inspect: (x: number, z: number) => world.features.query(x, z),
+  // Faz 6 hook: live congestion feeds scale traffic here
+  setTrafficDensity: (f: number) => vehicles.setDensity(f),
 };

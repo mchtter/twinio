@@ -55,6 +55,28 @@ canvas { display: block; }
 }
 #hud-toast.hidden { opacity: 0; }
 
+#inspector {
+  left: 12px; bottom: 44px; width: 330px; max-height: 52vh; overflow-y: auto;
+  font-size: 12px; padding-top: 8px;
+}
+#inspector.hidden { display: none; }
+#inspector-close {
+  position: sticky; top: 0; float: right; background: none; border: none; color: #7fd4ff;
+  font-size: 18px; cursor: pointer; line-height: 1; padding: 0 2px;
+}
+#inspector .insp-head { color: #7fd4ff; font-size: 13px; letter-spacing: 1px; margin-bottom: 2px; }
+#inspector .insp-sec { margin-top: 9px; border-top: 1px solid rgba(120,150,200,0.15); padding-top: 6px; }
+#inspector .insp-title { color: #ffd479; font-size: 11px; letter-spacing: 0.5px; margin-bottom: 3px; }
+#inspector .dim { color: #7c8798; font-size: 11px; }
+#inspector a { color: #8fc7ff; text-decoration: none; }
+#inspector a:hover { text-decoration: underline; }
+#inspector table.tags { margin-top: 4px; border-collapse: collapse; width: 100%; font-size: 11px; }
+#inspector table.tags td {
+  border: 1px solid rgba(120,150,200,0.14); padding: 1px 6px; vertical-align: top;
+  word-break: break-word; color: #b9c4d6;
+}
+#inspector table.tags td:first-child { color: #8ea3c0; white-space: nowrap; max-width: 130px; }
+
 #lock-overlay {
   position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
   background: rgba(5, 8, 14, 0.45); cursor: pointer;

@@ -15,17 +15,21 @@
 - [x] Beşik çatılar: `roof:shape=gabled/hipped` + müstakil ev sezgiseli (dörtgen taban)
 - [x] LOD halkası: 5×5 karo, dış halka hafif mod (bina+yol+alan; ağaç/donatı/ajan yok), yaklaşınca tam moda yükseltme
 - [x] Oyuncu-bina çarpışması (yürüme modunda taban kenarlarından kayarak itme, 8 m grid hash)
+- [x] Kırma (hipped) + piramit (pyramidal/dome) çatılar; `building:colour`/`roof:colour` etiketleri; prosedürel çatı/renk çeşitliliği
+- [x] Köprü/viyadük geometrisi (tabliye profili + ayaklar + korkuluk) ve altgeçit/tünel (arazi hendeği + discard maskesi + istinat duvarları + kesişim-bazlı derinlik sentezi)
+- [x] Tıkla-incele debug modalı (ham OSM etiketleri + motor kararları + OSM linki; `__twinio.inspect`)
 - [ ] Geometri üretimini Web Worker'lara taşıma (ana thread tamamen serbest)
 - [ ] Vektör karo sunucusuna geçiş seçeneği (Overpass bağımlılığını azaltır; protomaps/pmtiles)
-- [ ] Kırma (hipped) çatı, `building:part` desteği
+- [ ] `building:part` desteği
 - [ ] Uzak karolarda ağaç billboard'ları
-- [ ] Köprü/viyadük geometrisi, tünel desteği
 - [ ] Su shader'ı (dalga/yansıma), yağmur-kar efektleri
 
 ## Faz 2 — Trafik simülasyonu (başladı)
 
 - [x] Araçların trafik ışıklarına uyması (kırmızı/sarıda kavşak öncesi durma, ivmelenme/fren modeli)
 - [x] Basit araç takibi: aynı kenarda öndeki araca yavaşlama/durma (kuyruk oluşumu)
+- [x] Otoparklarda park halinde araçlar (sıra düzeni, lot başına doluluk metadatası) — canlı doluluk API kancası hazır
+- [x] Trafik yoğunluk kancası: `__twinio.setTrafficDensity(f)` + arter ağırlıklı doğma — Google/Yandex trafik katmanı bağlanınca yol bazlı yoğunluk buradan sürülecek
 - [ ] Tam IDM araç takip modeli, şerit değiştirme
 - [ ] Yaya geçitlerine uyma (geçen yayaya durma)
 - [ ] Kavşak faz planları (OSM `traffic_signals` gruplaması — karşılıklı kollar aynı fazda)
