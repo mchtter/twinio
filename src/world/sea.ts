@@ -210,12 +210,14 @@ export function buildSea(coastlines: V2[][], rect: TileRect, sample: HeightSampl
       g.rotateX(-Math.PI / 2);
       const pos = g.getAttribute('position');
       const uv = g.getAttribute('uv');
+      const nor = new Float32Array(pos.count * 3);
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, CONFIG.seaLevel);
         uv.setXY(i, pos.getX(i) / 30, pos.getZ(i) / 30);
+        nor[i * 3 + 1] = 1;
       }
       pos.needsUpdate = true;
-      g.computeVertexNormals();
+      g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
       geos.push(g);
     } catch {
       // degenerate polygon — skip
@@ -240,7 +242,9 @@ export function buildOpenSea(rect: TileRect): THREE.Mesh {
     uv[i * 2 + 1] = pos[i * 3 + 2] / 30;
   }
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  g.computeVertexNormals();
+  const nor = new Float32Array(18);
+  for (let i = 0; i < 6; i++) nor[i * 3 + 1] = 1;
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   return seaMeshFromGeos([g]);
 }
 

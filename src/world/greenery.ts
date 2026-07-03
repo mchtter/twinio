@@ -125,10 +125,11 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
     a.kind === 'zone'
       ? CONFIG.yZone + ((hashStr(a.id) % 100) / 100) * 0.02
       : a.kind === 'water'
-        ? 0.07
+        ? 0.12
         : CONFIG.yArea + ((hashStr(a.id) % 100) / 100) * 0.03;
   const n = out.length / 2;
   const pos = new Float32Array(n * 3);
+  const nor = new Float32Array(n * 3);
   const uvArr = new Float32Array(n * 2);
   for (let i = 0; i < n; i++) {
     const x = out[i * 2];
@@ -136,13 +137,16 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
     pos[i * 3] = x;
     pos[i * 3 + 1] = sample(x, z) + yOff;
     pos[i * 3 + 2] = z;
+    // constant up-normals: draped facets shade uniformly (no visible
+    // triangulation on untextured zone tints), same trick roads use
+    nor[i * 3 + 1] = 1;
     uvArr[i * 2] = x;
     uvArr[i * 2 + 1] = z;
   }
   const refined = new THREE.BufferGeometry();
   refined.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  refined.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   refined.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
-  refined.computeVertexNormals();
   return refined;
 }
 

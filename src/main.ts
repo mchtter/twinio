@@ -20,7 +20,13 @@ const startHour = parseFloat(params.get('hour') ?? '') || 13;
 
 // ---------- renderer / scene ----------
 const app = document.getElementById('app')!;
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+// logarithmic depth: uniform ~mm depth precision at any distance — the layer
+// bands (cm apart) stay separated even in far aerial views
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+  logarithmicDepthBuffer: true,
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, CONFIG.maxPixelRatio));
 renderer.shadowMap.enabled = true;
@@ -28,7 +34,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, CONFIG.cameraFar);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.3, CONFIG.cameraFar);
 camera.position.set(0, 45, 0);
 
 window.addEventListener('resize', () => {
