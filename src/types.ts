@@ -13,6 +13,7 @@ export interface BuildingSpec {
   holes: V2[][];
   height: number;
   kind: string;       // raw building tag value
+  use: string;        // canonical use (residential/commercial/industrial/stadium/…)
   roofShape?: 'flat' | 'gabled';
   roofHeight?: number;
 }
@@ -28,7 +29,7 @@ export interface RoadSpec {
   lamps: boolean;
 }
 
-export type AreaKind = 'grass' | 'forest' | 'sand' | 'water' | 'parking';
+export type AreaKind = 'grass' | 'forest' | 'sand' | 'water' | 'parking' | 'zone';
 
 export interface AreaSpec {
   id: string;
@@ -36,6 +37,7 @@ export interface AreaSpec {
   holes: V2[][];
   kind: AreaKind;
   treeDensity: number; // trees per m²
+  zoneColor?: [number, number, number]; // landuse tint (kind === 'zone')
 }
 
 export type PoiKind = 'lamp' | 'signal' | 'crossing' | 'tree';
@@ -63,6 +65,8 @@ export interface ParsedTile {
   areas: AreaSpec[];
   pois: PoiSpec[];
   ruleRoads: RuleRoad[];
+  /** natural=coastline ways (claim-independent; each tile clips its own sea) */
+  coastlines: V2[][];
 }
 
 /** Height sampler: world x/z -> terrain elevation (meters). */

@@ -62,6 +62,8 @@ function buildQuery(s: number, w: number, n: number, e: number): string {
   relation["building"]["type"="multipolygon"];
   way["highway"]["highway"!~"^(proposed|construction|corridor|raceway|elevator|bus_guideway)$"]["area"!="yes"];
   way["landuse"~"^(grass|forest|meadow|recreation_ground|village_green|cemetery|orchard|vineyard|greenfield|flowerbed)$"];
+  way["landuse"~"^(residential|commercial|industrial|retail|military|farmland|farmyard|brownfield|construction|garages|religious|education|institutional)$"];
+  way["natural"="coastline"];
   way["leisure"~"^(park|garden|pitch|playground|golf_course|dog_park|nature_reserve)$"];
   way["natural"~"^(wood|scrub|grassland|heath|beach|sand)$"];
   way["natural"="water"];
@@ -78,7 +80,7 @@ out geom;`;
 
 /** Fetch raw OSM elements for a slippy tile, with IndexedDB caching + endpoint failover. */
 export async function fetchOsmTile(z: number, x: number, y: number): Promise<OverpassElement[]> {
-  const key = `osm:${tileKey(z, x, y)}`;
+  const key = `osm:v${CONFIG.osmCacheVersion}:${tileKey(z, x, y)}`;
   const cached = await cacheGet<OverpassElement[]>(key, CONFIG.osmCacheTtlMs);
   if (cached) return cached;
 
@@ -195,6 +197,7 @@ function parseHeight(tags: Record<string, string>, id: number, kind: string): nu
     apartments: 17, residential: 13, office: 22, commercial: 12, retail: 8,
     industrial: 9, warehouse: 8, hotel: 24, hospital: 18, school: 9, university: 13,
     church: 12, mosque: 14, roof: 3.5, kiosk: 3,
+    stadium: 20, sports_hall: 12, mall: 14, supermarket: 7, hangar: 10, factory: 9,
   };
   const b = base[kind] ?? 9;
   return b * (0.75 + hash01(id) * 0.6);
@@ -234,6 +237,7 @@ export function parseTile(
   const areas: AreaSpec[] = [];
   const pois: PoiSpec[] = [];
   const ruleRoads: RuleRoad[] = [];
+  const coastlines: V2[][] = [];
 
   for (const el of elements) {
     const tags = el.tags ?? {};
@@ -253,6 +257,16 @@ export function parseTile(
     }
 
     if (el.type === 'way' && el.geometry && el.geometry.length >= 2) {
+      // coastline: claim-independent — every tile clips its own sea polygon
+      if (tags['natural'] === 'coastline') {
+        coastlines.push(
+          el.geometry.map((g) => {
+            const w = proj.toWorld(g.lat, g.lon);
+            return { x: w.x, z: w.z };
+          }),
+        );
+        continue;
+      }
       // buildings
       if (tags['building'] && tags['building'] !== 'no') {
         if (!isClosed(el.geometry) && el.geometry.length < 3) continue;
@@ -263,6 +277,7 @@ export function parseTile(
           id, outer, holes: [],
           height: parseHeight(tags, el.id, tags['building']),
           kind: tags['building'],
+          use: buildingUse(tags),
           ...parseRoof(tags),
         });
         continue;
@@ -300,9 +315,9 @@ export function parseTile(
         const kind = classifyArea(tags);
         if (kind && claim(id)) {
           const outer = ringToLocal(el.geometry, proj);
-          if (outer.length >= 3) {
+          if (outer.length >= 3 && !(kind.kind === 'zone' && tooBigZone(outer))) {
             areas.push({
-              id, outer, holes: [], kind: kind.kind, treeDensity: kind.density,
+              id, outer, holes: [], kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor,
             });
           }
         }
@@ -325,19 +340,72 @@ export function parseTile(
             id: subId, outer: outers[i], holes: myHoles,
             height: parseHeight(tags, el.id, tags['building']!),
             kind: tags['building']!,
+            use: buildingUse(tags),
             ...parseRoof(tags),
           });
         } else if (kind) {
-          areas.push({ id: subId, outer: outers[i], holes: myHoles, kind: kind.kind, treeDensity: kind.density });
+          areas.push({
+            id: subId, outer: outers[i], holes: myHoles,
+            kind: kind.kind, treeDensity: kind.density, zoneColor: kind.zoneColor,
+          });
         }
       }
     }
   }
 
-  return { buildings, roads, areas, pois, ruleRoads };
+  return { buildings, roads, areas, pois, ruleRoads, coastlines };
 }
 
-function classifyArea(tags: Record<string, string>): { kind: AreaKind; density: number } | undefined {
+/** Canonical building use for styling — building tag first, then POI tags. */
+function buildingUse(tags: Record<string, string>): string {
+  const b = tags['building'] ?? '';
+  const amen = tags['amenity'] ?? '';
+  const leis = tags['leisure'] ?? '';
+  if (['stadium', 'sports_hall', 'grandstand', 'sports_centre'].includes(b) || ['stadium', 'sports_centre'].includes(leis)) return 'stadium';
+  if (b === 'hospital' || amen === 'hospital' || amen === 'clinic') return 'hospital';
+  if (['school', 'university', 'kindergarten', 'college'].includes(b) || ['school', 'university', 'college', 'kindergarten'].includes(amen)) return 'education';
+  if (b === 'hotel' || tags['tourism'] === 'hotel') return 'hotel';
+  if (b === 'mosque' || b === 'church' || amen === 'place_of_worship') return 'worship';
+  if (['industrial', 'warehouse', 'factory', 'hangar'].includes(b)) return 'industrial';
+  if (['commercial', 'office'].includes(b)) return 'commercial';
+  if (['retail', 'mall', 'supermarket', 'kiosk'].includes(b) || tags['shop']) return 'retail';
+  if (['garage', 'garages', 'shed', 'hut', 'roof', 'carport', 'service'].includes(b)) return 'utility';
+  return 'residential';
+}
+
+/** Landuse zones larger than ~2.5 km across are skipped — low information,
+ * huge overhang beyond the tile. */
+function tooBigZone(outer: V2[]): boolean {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const p of outer) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  return Math.hypot(maxX - minX, maxZ - minZ) > 2500;
+}
+
+// subtle desaturated zoning tints — kept close to the base terrain tone
+const ZONE_COLORS: Record<string, [number, number, number]> = {
+  residential: [0.71, 0.68, 0.63],
+  commercial: [0.63, 0.67, 0.73],
+  retail: [0.74, 0.66, 0.61],
+  industrial: [0.62, 0.59, 0.66],
+  military: [0.66, 0.6, 0.57],
+  farmland: [0.69, 0.69, 0.55],
+  farmyard: [0.68, 0.65, 0.53],
+  brownfield: [0.64, 0.6, 0.54],
+  construction: [0.69, 0.63, 0.53],
+  garages: [0.61, 0.61, 0.61],
+  religious: [0.71, 0.69, 0.65],
+  education: [0.73, 0.7, 0.6],
+  institutional: [0.68, 0.68, 0.66],
+};
+
+function classifyArea(
+  tags: Record<string, string>,
+): { kind: AreaKind; density: number; zoneColor?: [number, number, number] } | undefined {
   if (tags['natural'] === 'water' || tags['waterway'] === 'riverbank' || tags['waterway'] === 'dock') {
     return { kind: 'water', density: 0 };
   }
@@ -352,6 +420,10 @@ function classifyArea(tags: Record<string, string>): { kind: AreaKind; density: 
     const density = GREEN_DENSITY[green];
     const kind: AreaKind = ['forest', 'wood', 'nature_reserve', 'scrub', 'orchard'].includes(green) ? 'forest' : 'grass';
     return { kind, density };
+  }
+  const zone = tags['landuse'];
+  if (zone && zone in ZONE_COLORS) {
+    return { kind: 'zone', density: 0, zoneColor: ZONE_COLORS[zone] };
   }
   return undefined;
 }

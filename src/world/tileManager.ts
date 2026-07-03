@@ -7,6 +7,7 @@ import { buildBuildings } from './buildings';
 import { buildRoads } from './roads';
 import { buildAreas } from './greenery';
 import { buildProps, TrafficSignalSet, SignalPoint, signalPhase } from './props';
+import { buildSea, buildOpenSea, TileRect } from './sea';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
 import { CollisionIndex, FootprintGrid, RoadClearanceGrid } from './collision';
@@ -185,6 +186,27 @@ export class World {
       const areas = buildAreas(areaSpecs, poiSpecs, sample, footprints);
       if (areas.areas) group.add(areas.areas);
       if (areas.trees) group.add(areas.trees);
+
+      // sea: coastline → clipped polygon; else open-sea DEM heuristic
+      const bounds = tileBounds(z, x, y);
+      const nw = this.terrain.proj.toWorld(bounds.north, bounds.west);
+      const se = this.terrain.proj.toWorld(bounds.south, bounds.east);
+      const rect: TileRect = { xMin: nw.x, xMax: se.x, zMin: nw.z, zMax: se.z };
+      let sea = buildSea(parsed.coastlines, rect, sample);
+      if (!sea && elements.length < 5) {
+        let maxH = 0;
+        for (let sy = 0; sy <= 2; sy++) {
+          for (let sx = 0; sx <= 2; sx++) {
+            const h = Math.abs(sample(rect.xMin + ((rect.xMax - rect.xMin) * sx) / 2, rect.zMin + ((rect.zMax - rect.zMin) * sy) / 2));
+            if (h > maxH) maxH = h;
+          }
+        }
+        if (maxH < 0.5) sea = buildOpenSea(rect); // flat at DEM zero + no data = open sea
+      }
+      if (sea) {
+        sea.visible = !this.hidden.has('water');
+        group.add(sea);
+      }
       await nextFrame();
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 

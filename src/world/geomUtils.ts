@@ -108,6 +108,38 @@ export function polylineLength(pts: V2[]): number {
   return l;
 }
 
+/** Refine flat triangles (xyz triplets, y ignored) by 4-way subdivision until
+ * every edge is below `threshold`. Returns flat [x,z] pairs (3 per triangle).
+ * Used to drape big polygons on the terrain without sinking/z-fighting. */
+export function refineTrianglesXZ(src: ArrayLike<number>, threshold: number, capFloats = 360000): number[] {
+  const out: number[] = [];
+  const stack: number[][] = [];
+  for (let i = 0; i < src.length; i += 9) {
+    stack.push([src[i], src[i + 2], src[i + 3], src[i + 5], src[i + 6], src[i + 8]]);
+  }
+  while (stack.length > 0) {
+    const t = stack.pop()!;
+    const [x1, z1, x2, z2, x3, z3] = t;
+    const e1 = Math.hypot(x2 - x1, z2 - z1);
+    const e2 = Math.hypot(x3 - x2, z3 - z2);
+    const e3 = Math.hypot(x1 - x3, z1 - z3);
+    if (Math.max(e1, e2, e3) <= threshold || out.length > capFloats) {
+      out.push(...t);
+      continue;
+    }
+    const mx1 = (x1 + x2) / 2, mz1 = (z1 + z2) / 2;
+    const mx2 = (x2 + x3) / 2, mz2 = (z2 + z3) / 2;
+    const mx3 = (x3 + x1) / 2, mz3 = (z3 + z1) / 2;
+    stack.push(
+      [x1, z1, mx1, mz1, mx3, mz3],
+      [mx1, mz1, x2, z2, mx2, mz2],
+      [mx3, mz3, mx2, mz2, x3, z3],
+      [mx1, mz1, mx2, mz2, mx3, mz3],
+    );
+  }
+  return out;
+}
+
 /** Mulberry32 seeded PRNG — deterministic scattering per feature id. */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0;

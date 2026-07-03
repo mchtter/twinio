@@ -15,23 +15,48 @@ const ROOF_TILE = new THREE.Color(0x9a5f47);
 // kinds that get a gabled roof by default (when footprint is a simple quad)
 const GABLE_KINDS = new Set(['house', 'detached', 'semidetached_house', 'bungalow', 'farm', 'cabin']);
 
+/** Visual identity per canonical building use. `plain` = windowless facade. */
+interface UseStyle {
+  walls: THREE.Color[];
+  roof: THREE.Color;
+  plain?: boolean;
+}
+
+const c = (h: number) => new THREE.Color(h);
+const USE_STYLES: Record<string, UseStyle> = {
+  commercial: { walls: [c(0xb6c1cc), c(0xaab7c4), c(0xc2ccd6)], roof: c(0x6f7780) },
+  retail: { walls: [c(0xd8c8ab), c(0xd2bfa0), c(0xcabca6)], roof: c(0x8a6f55) },
+  industrial: { walls: [c(0xa8adb2), c(0x9aa0a6), c(0xb0b4b8)], roof: c(0x767c82), plain: true },
+  stadium: { walls: [c(0xc8cdd2), c(0xbfc6cd)], roof: c(0x9aa3ab), plain: true },
+  hospital: { walls: [c(0xe8e6e0), c(0xdfe3e6)], roof: c(0xa05a52) },
+  education: { walls: [c(0xdcc9a5), c(0xd5c39e)], roof: c(0x9a6a4f) },
+  hotel: { walls: [c(0xdccdb4), c(0xd5c2a5)], roof: c(0x77685a) },
+  worship: { walls: [c(0xe3dccb), c(0xded5c0)], roof: c(0x4d7a66) },
+  utility: { walls: [c(0xb3afa7)], roof: c(0x8a867e), plain: true },
+};
+
 /** Extrudes building footprints into walls + roofs, merged into 2 meshes per tile. */
 export function buildBuildings(specs: BuildingSpec[], sample: HeightSampler): THREE.Object3D | null {
   if (specs.length === 0) return null;
 
-  // walls accumulated manually (custom UVs per wall run)
-  const wPos: number[] = [];
-  const wNor: number[] = [];
-  const wUv: number[] = [];
-  const wCol: number[] = [];
-  const wIdx: number[] = [];
+  // two wall sets: windowed facades and plain (industrial/stadium/utility)
+  interface WallArrays { pos: number[]; nor: number[]; uv: number[]; col: number[]; idx: number[] }
+  const windowed: WallArrays = { pos: [], nor: [], uv: [], col: [], idx: [] };
+  const plain: WallArrays = { pos: [], nor: [], uv: [], col: [], idx: [] };
   const roofGeos: THREE.BufferGeometry[] = [];
 
   for (const b of specs) {
     if (b.outer.length < 3) continue;
     const rng = seededRandom(hashStr(b.id));
-    const wallColor = WALL_PALETTE[Math.floor(rng() * WALL_PALETTE.length)];
-    const roofColor = (b.kind === 'house' || b.kind === 'detached' || b.height < 8 ? ROOF_TILE : ROOF_FLAT)
+    const style = USE_STYLES[b.use];
+    const w = style?.plain ? plain : windowed;
+    const wPos = w.pos, wNor = w.nor, wUv = w.uv, wCol = w.col, wIdx = w.idx;
+    const wallColor = style
+      ? style.walls[Math.floor(rng() * style.walls.length)]
+      : WALL_PALETTE[Math.floor(rng() * WALL_PALETTE.length)];
+    const roofColor = (
+      style?.roof ?? (b.kind === 'house' || b.kind === 'detached' || b.height < 8 ? ROOF_TILE : ROOF_FLAT)
+    )
       .clone()
       .offsetHSL(0, 0, (rng() - 0.5) * 0.06);
 
@@ -100,14 +125,18 @@ export function buildBuildings(specs: BuildingSpec[], sample: HeightSampler): TH
   const group = new THREE.Group();
   const mats = getMaterials();
 
-  if (wPos.length > 0) {
+  for (const [arrays, mat] of [
+    [windowed, mats.wall],
+    [plain, mats.wallPlain],
+  ] as const) {
+    if (arrays.pos.length === 0) continue;
     const wallGeo = new THREE.BufferGeometry();
-    wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos, 3));
-    wallGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNor, 3));
-    wallGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wUv, 2));
-    wallGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol, 3));
-    wallGeo.setIndex(wIdx);
-    const walls = new THREE.Mesh(wallGeo, mats.wall);
+    wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(arrays.pos, 3));
+    wallGeo.setAttribute('normal', new THREE.Float32BufferAttribute(arrays.nor, 3));
+    wallGeo.setAttribute('uv', new THREE.Float32BufferAttribute(arrays.uv, 2));
+    wallGeo.setAttribute('color', new THREE.Float32BufferAttribute(arrays.col, 3));
+    wallGeo.setIndex(arrays.idx);
+    const walls = new THREE.Mesh(wallGeo, mat);
     walls.castShadow = true;
     walls.receiveShadow = true;
     group.add(walls);

@@ -411,21 +411,11 @@ function addKerbArcs(
       x: j.x + c.dx * j.ext + c.dz * (c.hw + 1.05),
       z: j.z + c.dz * j.ext - c.dx * (c.hw + 1.05),
     };
-    const ra = Math.hypot(pa.x - j.x, pa.z - j.z);
-    const rc = Math.hypot(pc.x - j.x, pc.z - j.z);
-    let ta = Math.atan2(pa.z - j.z, pa.x - j.x);
-    let tc = Math.atan2(pc.z - j.z, pc.x - j.x);
-    while (tc <= ta) tc += Math.PI * 2;
-    const span = tc - ta;
-    if (span < 0.05 || span > 5.9) continue; // degenerate or full-circle corner
-    const steps = Math.max(2, Math.ceil(span / 0.28));
-    const line: V2[] = [];
-    for (let s = 0; s <= steps; s++) {
-      const t = s / steps;
-      const ang = ta + span * t;
-      const r = ra + (rc - ra) * t;
-      line.push({ x: j.x + Math.cos(ang) * r, z: j.z + Math.sin(ang) * r });
-    }
+    // follow the junction plate's shape: the plate boundary between two arm
+    // mouths is a straight chord, so the kerb is the parallel chord 1.05 m out
+    // (subdivided for terrain draping) — no circular bulges
+    if (Math.hypot(pc.x - pa.x, pc.z - pa.z) < 0.6) continue;
+    const line: V2[] = subdividePolyline([pa, pc], 6);
     // rule check with tight margin: arc endpoints sit 1.05 m off their own
     // carriageways by construction; only genuine overlaps get culled
     const bad = line.map(

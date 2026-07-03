@@ -114,6 +114,11 @@ export class TerrainManager {
       console.warn('DEM tile failed', tx, ty, e);
       grid = new Float32Array((n + 1) * (n + 1));
     }
+    // the radar DSM is noisy over water (±1-2 m) — snap near-sea-level values
+    // to exactly 0 so the flat sea sheet never fights the terrain
+    for (let i = 0; i < grid.length; i++) {
+      if (Math.abs(grid[i]) < 0.8) grid[i] = 0;
+    }
     if (gen !== this.generation) return;
     const mesh = this.buildMesh(grid, tx, ty, n);
     this.tiles.set(tileKey(z, tx, ty), { mesh, grid, tx, ty });

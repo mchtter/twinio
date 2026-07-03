@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CONFIG } from '../config';
 import type { AreaSpec, PoiSpec, HeightSampler } from '../types';
-import { pointInPolygon, polygonAreaAbs, ringBBox, seededRandom, hashStr } from './geomUtils';
+import { pointInPolygon, polygonAreaAbs, ringBBox, seededRandom, hashStr, refineTrianglesXZ } from './geomUtils';
 import { getMaterials } from './materials';
 import { FootprintGrid } from './collision';
 
@@ -14,13 +14,25 @@ export function buildAreas(
   footprints?: FootprintGrid,
 ): { areas: THREE.Object3D | null; trees: THREE.Object3D | null } {
   const geoBuckets: Record<string, THREE.BufferGeometry[]> = {
-    grass: [], forest: [], sand: [], parking: [], water: [],
+    grass: [], forest: [], sand: [], parking: [], water: [], zone: [],
   };
   const treeSpots: { x: number; z: number; s: number }[] = [];
 
   for (const a of areas) {
     if (a.outer.length < 3) continue;
     const geo = polygonGeometry(a, sample);
+    if (geo && a.kind === 'zone') {
+      // landuse tint via vertex colors (single merged mesh, one material)
+      const c = a.zoneColor ?? [0.68, 0.66, 0.62];
+      const count = geo.getAttribute('position').count;
+      const col = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        col[i * 3] = c[0];
+        col[i * 3 + 1] = c[1];
+        col[i * 3 + 2] = c[2];
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    }
     if (geo) geoBuckets[a.kind].push(geo);
 
     // scatter trees
@@ -53,7 +65,8 @@ export function buildAreas(
   const mats = getMaterials();
   const group = new THREE.Group();
   const matFor: Record<string, THREE.Material> = {
-    grass: mats.grass, forest: mats.forest, sand: mats.sand, parking: mats.parking, water: mats.water,
+    grass: mats.grass, forest: mats.forest, sand: mats.sand, parking: mats.parking,
+    water: mats.water, zone: mats.zone,
   };
   for (const [kind, geos] of Object.entries(geoBuckets)) {
     if (geos.length === 0) continue;
@@ -94,60 +107,26 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
   }
   geo.rotateX(-Math.PI / 2); // (sx, sy, 0) -> (sx, 0, -sy) = local (x, 0, z)
 
-  if (a.kind === 'water') {
-    // water is a flat sheet slightly below the lowest shore point — no draping
-    const pos = geo.getAttribute('position');
-    const uv = geo.getAttribute('uv');
-    let minH = Infinity;
-    for (const p of a.outer) {
-      const h = sample(p.x, p.z);
-      if (h < minH) minH = h;
-    }
-    if (!isFinite(minH)) minH = 0;
-    const y = Math.max(minH - 0.3, -0.2);
-    for (let i = 0; i < pos.count; i++) pos.setY(i, y);
-    for (let i = 0; i < uv.count; i++) uv.setXY(i, pos.getX(i), pos.getZ(i));
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
-    return geo;
-  }
-
   // Engine rule: big flat triangles cut through undulating terrain (sunken
   // areas + z-fighting). Refine every triangle by 4-way subdivision until its
   // longest edge is below the terrain feature scale, THEN drape each vertex.
+  // Water is draped too: the Copernicus DSM already carries the water-surface
+  // elevation, so rivers slope naturally and lakes stay flat.
   const src = geo.getAttribute('position').array as Float32Array;
   geo.dispose();
   const area = polygonAreaAbs(a.outer);
   // adapt threshold so a huge forest can't explode the vertex budget (~20k tris)
   const threshold = Math.max(16, Math.sqrt((2 * area) / 20000));
-  const out: number[] = [];
-  const stack: number[][] = [];
-  for (let i = 0; i < src.length; i += 9) {
-    stack.push([src[i], src[i + 2], src[i + 3], src[i + 5], src[i + 6], src[i + 8]]);
-  }
-  while (stack.length > 0) {
-    const t = stack.pop()!;
-    const [x1, z1, x2, z2, x3, z3] = t;
-    const e1 = Math.hypot(x2 - x1, z2 - z1);
-    const e2 = Math.hypot(x3 - x2, z3 - z2);
-    const e3 = Math.hypot(x1 - x3, z1 - z3);
-    if (Math.max(e1, e2, e3) <= threshold || out.length > 360000) {
-      out.push(...t);
-      continue;
-    }
-    const mx1 = (x1 + x2) / 2, mz1 = (z1 + z2) / 2;
-    const mx2 = (x2 + x3) / 2, mz2 = (z2 + z3) / 2;
-    const mx3 = (x3 + x1) / 2, mz3 = (z3 + z1) / 2;
-    stack.push(
-      [x1, z1, mx1, mz1, mx3, mz3],
-      [mx1, mz1, x2, z2, mx2, mz2],
-      [mx3, mz3, mx2, mz2, x3, z3],
-      [mx1, mz1, mx2, mz2, mx3, mz3],
-    );
-  }
+  const out = refineTrianglesXZ(src, threshold);
 
-  // overlapping OSM areas (e.g. park + grass duplicates) get distinct offsets
-  const yOff = CONFIG.yArea + ((hashStr(a.id) % 100) / 100) * 0.04;
+  // overlapping OSM areas (e.g. park + grass duplicates) get distinct offsets;
+  // landuse zones live in their own lower band so greens always win on top
+  const yOff =
+    a.kind === 'zone'
+      ? CONFIG.yZone + ((hashStr(a.id) % 100) / 100) * 0.02
+      : a.kind === 'water'
+        ? 0.07
+        : CONFIG.yArea + ((hashStr(a.id) % 100) / 100) * 0.03;
   const n = out.length / 2;
   const pos = new Float32Array(n * 3);
   const uvArr = new Float32Array(n * 2);

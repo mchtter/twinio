@@ -174,6 +174,28 @@ export function makeFacadeEmissiveTexture(): THREE.CanvasTexture {
   });
 }
 
+/** Windowless facade for industrial/stadium/utility buildings. */
+export function makeConcreteTexture(): THREE.CanvasTexture {
+  return canvas(256, (ctx, s) => {
+    ctx.fillStyle = '#cfccc5';
+    ctx.fillRect(0, 0, s, s);
+    noise(ctx, s, 0.08, 150);
+    // faint panel joints
+    ctx.strokeStyle = 'rgba(70,70,70,0.22)';
+    ctx.lineWidth = 2;
+    for (let i = 1; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo((i * s) / 4, 0);
+      ctx.lineTo((i * s) / 4, s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, (i * s) / 4);
+      ctx.lineTo(s, (i * s) / 4);
+      ctx.stroke();
+    }
+  });
+}
+
 export interface SharedMaterials {
   roadMajor: THREE.MeshStandardMaterial;
   roadMinor: THREE.MeshStandardMaterial;
@@ -187,7 +209,9 @@ export interface SharedMaterials {
   parking: THREE.MeshStandardMaterial;
   water: THREE.MeshStandardMaterial;
   wall: THREE.MeshStandardMaterial;
+  wallPlain: THREE.MeshStandardMaterial;
   roof: THREE.MeshStandardMaterial;
+  zone: THREE.MeshStandardMaterial;
   tree: THREE.MeshStandardMaterial;
   pole: THREE.MeshStandardMaterial;
   lampHead: THREE.MeshStandardMaterial;
@@ -209,6 +233,9 @@ export function getMaterials(): SharedMaterials {
   const sandTex = makeSandTexture();
   const facadeTex = makeFacadeTexture();
   const facadeEmissiveTex = makeFacadeEmissiveTexture();
+  // wall uvs are meters/FACADE_METERS(12); repeat 2 → one concrete panel ≈ 6 m
+  const concreteTex = makeConcreteTexture();
+  concreteTex.repeat.set(2, 2);
   grassTex.repeat.set(1 / 14, 1 / 14);
   forestTex.repeat.set(1 / 14, 1 / 14);
   sandTex.repeat.set(1 / 10, 1 / 10);
@@ -237,7 +264,11 @@ export function getMaterials(): SharedMaterials {
       map: facadeTex, vertexColors: true, roughness: 0.85,
       emissive: 0xffc87a, emissiveIntensity: 0, emissiveMap: facadeEmissiveTex,
     }),
+    wallPlain: new THREE.MeshStandardMaterial({
+      map: concreteTex, vertexColors: true, roughness: 0.92,
+    }),
     roof: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }),
+    zone: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }),
     tree: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }),
     pole: new THREE.MeshStandardMaterial({ color: 0x4c5157, roughness: 0.6, metalness: 0.6 }),
     lampHead: new THREE.MeshStandardMaterial({

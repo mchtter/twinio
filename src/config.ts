@@ -23,17 +23,20 @@ export const CONFIG = {
   shadowMapSize: 2048,
   shadowRange: 160,
 
-  // Vertical offsets to prevent z-fighting between draped layers
-  yArea: 0.06,
-  yPath: 0.12,
-  yRoadMinor: 0.16,
-  yRoadMajor: 0.2,
-  ySidewalk: 0.26,
-  yCrosswalk: 0.28,
-  // per-road deterministic jitter added on top (kills same-class overlap z-fighting)
-  yRoadJitter: 0.035,
-  // junction caps sit above every road (max 0.2+0.035) but below sidewalks (0.26)
-  yJunction: 0.245,
+  // Vertical layer stack (draped on terrain). Each band = base + its own
+  // deterministic jitter; bands never overlap → no cross-layer z-fighting.
+  yZone: 0.04,       // landuse tint         [0.04..0.06]
+  yArea: 0.08,       // green/parking/sand   [0.08..0.11]
+  yPath: 0.14,       // footways             [0.14..0.16]
+  yRoadMinor: 0.18,  //                      [0.18..0.20]
+  yRoadMajor: 0.22,  //                      [0.22..0.24]
+  yJunction: 0.26,   // junction plates      [0.26..0.275]
+  ySidewalk: 0.3,
+  yCrosswalk: 0.32,
+  yRoadJitter: 0.02,
+  // absolute sea-surface height: DEM near-zero noise is snapped to 0, so a
+  // flat sheet at +0.3 stays cleanly above the seabed terrain
+  seaLevel: 0.3,
   // roads are subdivided to this max segment length so they drape the terrain
   roadSubdivision: 9,
 
@@ -63,6 +66,7 @@ export const CONFIG = {
   overpassConcurrency: 2,
   overpassTimeoutMs: 45000,
   osmCacheTtlMs: 7 * 24 * 3600 * 1000,
+  osmCacheVersion: 2, // bump when the Overpass query changes (invalidates cache)
   terrariumUrl: (z: number, x: number, y: number) =>
     `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,
   // Copernicus GLO-30 COGs — OpenTopography mirror (CORS + range requests enabled;
