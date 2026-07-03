@@ -24,13 +24,117 @@ export interface RoadBuildResult {
   walkable: THREE.Vector3[][];
 }
 
+/** Topological junction: a first-class intersection object. Arms point outward
+ * from the node; every arm's ribbon is trimmed back by `ext` so the junction
+ * plate is the real surface (no overlapping geometry inside the junction). */
+export interface JunctionArm {
+  dx: number;
+  dz: number;
+  hw: number;
+  sw: boolean; // does this arm's road carry sidewalks?
+}
+
+export interface Junction {
+  x: number;
+  z: number;
+  ext: number;
+  arms: JunctionArm[];
+}
+
+function junctionNodeKey(p: V2): string {
+  return `${Math.round(p.x)}_${Math.round(p.z)}`;
+}
+
+/** Detect intersections from claim-independent rule roads: any node shared by
+ * ≥3 arms. OSM ways share node coordinates at true crossings, so this is the
+ * topology already present in the data — made explicit. */
+function buildJunctions(roads: { pts: V2[]; width: number; cls: string; sidewalks?: boolean }[]): Map<string, Junction> {
+  interface Node { x: number; z: number; arms: JunctionArm[] }
+  const nodes = new Map<string, Node>();
+  for (const r of roads) {
+    if (r.cls === 'path' || r.pts.length < 2) continue;
+    for (let k = 0; k < r.pts.length; k++) {
+      const p = r.pts[k];
+      const key = junctionNodeKey(p);
+      let nd = nodes.get(key);
+      if (!nd) {
+        nd = { x: p.x, z: p.z, arms: [] };
+        nodes.set(key, nd);
+      }
+      for (const nb of [r.pts[k - 1], r.pts[k + 1]]) {
+        if (!nb) continue;
+        const dx = nb.x - p.x;
+        const dz = nb.z - p.z;
+        const l = Math.hypot(dx, dz);
+        if (l > 1e-6) nd.arms.push({ dx: dx / l, dz: dz / l, hw: r.width / 2, sw: r.sidewalks ?? false });
+      }
+    }
+  }
+  const junctions = new Map<string, Junction>();
+  for (const [key, nd] of nodes) {
+    if (nd.arms.length < 3) continue;
+    let maxHw = 0;
+    for (const a of nd.arms) {
+      if (a.hw > maxHw) maxHw = a.hw;
+    }
+    junctions.set(key, { x: nd.x, z: nd.z, ext: Math.min(maxHw * 1.2 + 1.0, 14), arms: nd.arms });
+  }
+  return junctions;
+}
+
+/** Split a centerline at interior junction vertices, then trim every piece end
+ * that touches a junction back by that junction's ext. */
+function splitAndTrim(pts: V2[], junctions: Map<string, Junction>): V2[][] {
+  const pieces: V2[][] = [];
+  let cur: V2[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    cur.push(pts[i]);
+    if (i < pts.length - 1 && junctions.has(junctionNodeKey(pts[i]))) {
+      pieces.push(cur);
+      cur = [pts[i]];
+    }
+  }
+  pieces.push(cur);
+
+  const out: V2[][] = [];
+  for (let piece of pieces) {
+    const jStart = junctions.get(junctionNodeKey(piece[0]));
+    if (jStart) piece = trimStart(piece, jStart.ext);
+    if (piece.length >= 2) {
+      const jEnd = junctions.get(junctionNodeKey(piece[piece.length - 1]));
+      if (jEnd) piece = trimStart(piece.slice().reverse(), jEnd.ext).reverse();
+    }
+    if (piece.length >= 2) out.push(piece);
+  }
+  return out;
+}
+
+function trimStart(pts: V2[], dist: number): V2[] {
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+    if (acc + seg > dist) {
+      const t = (dist - acc) / seg;
+      const np = {
+        x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+        z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * t,
+      };
+      return [np, ...pts.slice(i)];
+    }
+    acc += seg;
+  }
+  return []; // consumed entirely by the junction area
+}
+
 /** Builds road ribbons (with lane markings), sidewalks and zebra crossings.
  * Engine rules against broken/overlapping data:
+ * - junctions are first-class: arms are trimmed, the plate IS the surface
  * - polylines are subdivided (~9 m) and draped vertex-by-vertex on the terrain
  * - every road gets a deterministic micro-offset in y → no same-class z-fighting
  * - sidewalk segments falling inside building footprints are skipped
  * - sidewalk segments on ANY other road's carriageway are skipped (junction-safe)
- * - offset fold-backs (sharp corners) are culled by direction-reversal detection */
+ * - offset fold-backs (sharp corners) are culled by direction-reversal detection
+ * - kerb arcs connect adjacent arms' sidewalks around each junction */
 export function buildRoads(
   roads: RoadSpec[],
   crossings: PoiSpec[],
@@ -51,81 +155,67 @@ export function buildRoads(
   const drivable: RoadBuildResult['drivable'] = [];
   const walkable: THREE.Vector3[][] = [];
 
+  // first-class intersections from claim-independent geometry (cross-tile safe)
+  const junctions = buildJunctions(ruleRoads ?? roads);
+
   for (const r of roads) {
     if (r.pts.length < 2) continue;
-    const pts = subdividePolyline(r.pts, CONFIG.roadSubdivision);
     const jitter = ((hashStr(r.id) % 1000) / 1000) * CONFIG.yRoadJitter;
     const yOff =
       (r.cls === 'major' ? CONFIG.yRoadMajor : r.cls === 'minor' ? CONFIG.yRoadMinor : CONFIG.yPath) + jitter;
-    addRibbon(buckets[r.cls], pts, r.width, yOff, sample, r.cls === 'major' ? 8 : 6);
+    const vMeters = r.cls === 'major' ? 8 : 6;
 
-    if (r.cls !== 'path') {
-      const pts3 = pts.map((p, i) => new THREE.Vector3(p.x, probedHeight(pts, i, sample) + yOff + 0.05, p.z));
-      if (pts3.length >= 2) drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
-    } else {
-      walkable.push(pts.map((p, i) => new THREE.Vector3(p.x, probedHeight(pts, i, sample) + yOff + 0.05, p.z)));
-    }
+    // visual geometry is split at junctions and trimmed back — ribbons and
+    // sidewalks never enter the junction area; the plate is the real surface
+    const trimmed = r.cls === 'path' ? [r.pts] : splitAndTrim(r.pts, junctions);
+    for (const piece of trimmed) {
+      const pts = subdividePolyline(piece, CONFIG.roadSubdivision);
+      if (pts.length < 2) continue;
+      addRibbon(buckets[r.cls], pts, r.width, yOff, sample, vMeters);
 
-    if (r.sidewalks && pts.length >= 2) {
-      for (const side of [1, -1]) {
-        const line = offsetPolyline(pts, side * (r.width / 2 + 1.05));
-        const bad = new Array<boolean>(line.length).fill(false);
-        // offset fold-back culling: a segment running opposite to its parent
-        // segment means the offset line self-intersected at a sharp corner
-        for (let k = 0; k + 1 < line.length; k++) {
-          const dox = line[k + 1].x - line[k].x;
-          const doz = line[k + 1].z - line[k].z;
-          const dpx = pts[k + 1].x - pts[k].x;
-          const dpz = pts[k + 1].z - pts[k].z;
-          if (dox * dpx + doz * dpz < 0) {
-            bad[k] = bad[k + 1] = true;
+      if (r.sidewalks && pts.length >= 2) {
+        for (const side of [1, -1]) {
+          const line = offsetPolyline(pts, side * (r.width / 2 + 1.05));
+          const bad = new Array<boolean>(line.length).fill(false);
+          // offset fold-back culling: a segment running opposite to its parent
+          // segment means the offset line self-intersected at a sharp corner
+          for (let k = 0; k + 1 < line.length; k++) {
+            const dox = line[k + 1].x - line[k].x;
+            const doz = line[k + 1].z - line[k].z;
+            const dpx = pts[k + 1].x - pts[k].x;
+            const dpz = pts[k + 1].z - pts[k].z;
+            if (dox * dpx + doz * dpz < 0) {
+              bad[k] = bad[k + 1] = true;
+            }
+          }
+          for (let k = 0; k < line.length; k++) {
+            if (bad[k]) continue;
+            if (footprints?.inside(line[k].x, line[k].z)) bad[k] = true;
+            else if (clearance?.blocked(line[k].x, line[k].z, 1.15, r.id)) bad[k] = true;
+          }
+          for (const run of splitRuns(line, bad)) {
+            addRibbon(buckets.sidewalk, run, 1.9, CONFIG.ySidewalk, sample, 2);
+            walkable.push(run.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
           }
         }
-        for (let k = 0; k < line.length; k++) {
-          if (bad[k]) continue;
-          if (footprints?.inside(line[k].x, line[k].z)) bad[k] = true;
-          else if (clearance?.blocked(line[k].x, line[k].z, 1.15, r.id)) bad[k] = true;
-        }
-        for (const run of splitRuns(line, bad)) {
-          addRibbon(buckets.sidewalk, run, 1.9, CONFIG.ySidewalk, sample, 2);
-          walkable.push(run.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
-        }
       }
+    }
+
+    // agents use the UNtrimmed centerline: vehicles drive across the plate
+    const full = subdividePolyline(r.pts, CONFIG.roadSubdivision);
+    if (r.cls !== 'path') {
+      const pts3 = full.map((p, i) => new THREE.Vector3(p.x, probedHeight(full, i, sample) + yOff + 0.05, p.z));
+      if (pts3.length >= 2) drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
+    } else {
+      walkable.push(full.map((p, i) => new THREE.Vector3(p.x, probedHeight(full, i, sample) + yOff + 0.05, p.z)));
     }
   }
 
-  // ---- junction plates: a merged asphalt polygon over every node where ≥3 road
-  // arms meet. The polygon follows each arm's real width (corner points at the
-  // arm mouths), so the intersection reads as one continuous surface.
-  // Built from rule roads (claim-independent) → works across tile borders;
-  // claimNode dedupes the plate itself between tiles.
-  interface JArm { dx: number; dz: number; hw: number }
-  interface JNode { x: number; z: number; arms: JArm[] }
-  const jnodes = new Map<string, JNode>();
-  const jroads = ruleRoads ?? roads;
-  for (const r of jroads) {
-    if (r.cls === 'path' || r.pts.length < 2) continue;
-    for (let k = 0; k < r.pts.length; k++) {
-      const p = r.pts[k];
-      const key = `${Math.round(p.x)}_${Math.round(p.z)}`;
-      let nd = jnodes.get(key);
-      if (!nd) {
-        nd = { x: p.x, z: p.z, arms: [] };
-        jnodes.set(key, nd);
-      }
-      for (const nb of [r.pts[k - 1], r.pts[k + 1]]) {
-        if (!nb) continue;
-        const dx = nb.x - p.x;
-        const dz = nb.z - p.z;
-        const l = Math.hypot(dx, dz);
-        if (l > 1e-6) nd.arms.push({ dx: dx / l, dz: dz / l, hw: r.width / 2 });
-      }
-    }
-  }
-  for (const [key, nd] of jnodes) {
-    if (nd.arms.length < 3) continue; // straight continuations need no plate
+  // ---- junction surfaces + kerb arcs (owned by one tile via claimNode) ----
+  for (const [key, j] of junctions) {
     if (claimNode && !claimNode(`jn:${key}`)) continue; // built by another tile
-    addJunctionPlate(buckets.junction, nd.x, nd.z, nd.arms, sample);
+    addJunctionPlate(buckets.junction, j, key, sample);
+    addKerbArcs(buckets.sidewalk, j, sample, walkable, footprints, clearance);
   }
 
   // zebra crossings snapped onto the nearest drivable road segment
@@ -253,19 +343,12 @@ function probedHeight(pts: V2[], i: number, sample: HeightSampler): number {
 
 /** Draped merged junction plate: for every arm, two corner points at the arm
  * mouth (center + dir·ext ± perp·halfWidth); all corners sorted by angle and
- * fanned from the node — the plate hugs the actual arm widths. */
-function addJunctionPlate(
-  b: Bucket,
-  cx: number,
-  cz: number,
-  arms: { dx: number; dz: number; hw: number }[],
-  sample: HeightSampler,
-): void {
-  let maxHw = 0;
-  for (const a of arms) {
-    if (a.hw > maxHw) maxHw = a.hw;
-  }
-  const ext = Math.min(maxHw * 1.2 + 1.0, 14);
+ * fanned from the node. Arms are trimmed to the same ext, so this polygon IS
+ * the junction surface — nothing overlaps beneath it. */
+function addJunctionPlate(b: Bucket, j: Junction, key: string, sample: HeightSampler): void {
+  const { x: cx, z: cz, ext, arms } = j;
+  // small deterministic offset so neighbouring plates on short blocks never z-fight
+  const y = CONFIG.yJunction + ((hashStr(key) % 100) / 100) * 0.015;
   const corners: { x: number; z: number; ang: number }[] = [];
   for (const a of arms) {
     const w = a.hw + 0.15;
@@ -283,11 +366,11 @@ function addJunctionPlate(
 
   const ch = sample(cx, cz);
   const base = b.pos.length / 3;
-  b.pos.push(cx, ch + CONFIG.yJunction, cz);
+  b.pos.push(cx, ch + y, cz);
   b.nor.push(0, 1, 0);
   b.uv.push(cx / 7, cz / 7);
   for (const c of corners) {
-    b.pos.push(c.x, Math.max(sample(c.x, c.z), ch) + CONFIG.yJunction, c.z);
+    b.pos.push(c.x, Math.max(sample(c.x, c.z), ch) + y, c.z);
     b.nor.push(0, 1, 0);
     b.uv.push(c.x / 7, c.z / 7);
   }
@@ -295,6 +378,63 @@ function addJunctionPlate(
   for (let s = 0; s < n; s++) {
     // (center, next, current) → face up (angle-ascending ring)
     b.idx.push(base, base + 1 + ((s + 1) % n), base + 1 + s);
+  }
+}
+
+/** Kerb arcs: for each pair of angularly adjacent sidewalk-carrying arms,
+ * connect their sidewalk mouths with an arc around the junction — sidewalks
+ * flow continuously around every corner instead of stopping dead. */
+function addKerbArcs(
+  b: Bucket,
+  j: Junction,
+  sample: HeightSampler,
+  walkable: THREE.Vector3[][],
+  footprints?: FootprintGrid,
+  clearance?: RoadClearanceGrid,
+): void {
+  const arms = j.arms
+    .map((a) => ({ ...a, ang: Math.atan2(a.dz, a.dx) }))
+    .sort((p, q) => p.ang - q.ang);
+  const n = arms.length;
+  for (let i = 0; i < n; i++) {
+    const a = arms[i];
+    const c = arms[(i + 1) % n];
+    if (!a.sw || !c.sw) continue;
+    // corner sector runs CCW from arm a to arm c.
+    // sidewalk mouth beside arm a on its CCW side: perpCCW(dir) = (-dz, dx)
+    const pa = {
+      x: j.x + a.dx * j.ext - a.dz * (a.hw + 1.05),
+      z: j.z + a.dz * j.ext + a.dx * (a.hw + 1.05),
+    };
+    // beside arm c on its CW side: perpCW(dir) = (dz, -dx)
+    const pc = {
+      x: j.x + c.dx * j.ext + c.dz * (c.hw + 1.05),
+      z: j.z + c.dz * j.ext - c.dx * (c.hw + 1.05),
+    };
+    const ra = Math.hypot(pa.x - j.x, pa.z - j.z);
+    const rc = Math.hypot(pc.x - j.x, pc.z - j.z);
+    let ta = Math.atan2(pa.z - j.z, pa.x - j.x);
+    let tc = Math.atan2(pc.z - j.z, pc.x - j.x);
+    while (tc <= ta) tc += Math.PI * 2;
+    const span = tc - ta;
+    if (span < 0.05 || span > 5.9) continue; // degenerate or full-circle corner
+    const steps = Math.max(2, Math.ceil(span / 0.28));
+    const line: V2[] = [];
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const ang = ta + span * t;
+      const r = ra + (rc - ra) * t;
+      line.push({ x: j.x + Math.cos(ang) * r, z: j.z + Math.sin(ang) * r });
+    }
+    // rule check with tight margin: arc endpoints sit 1.05 m off their own
+    // carriageways by construction; only genuine overlaps get culled
+    const bad = line.map(
+      (p) => footprints?.inside(p.x, p.z) === true || clearance?.blocked(p.x, p.z, 0.1) === true,
+    );
+    for (const run of splitRuns(line, bad)) {
+      addRibbon(b, run, 1.9, CONFIG.ySidewalk, sample, 2);
+      walkable.push(run.map((p) => new THREE.Vector3(p.x, sample(p.x, p.z) + CONFIG.ySidewalk + 0.03, p.z)));
+    }
   }
 }
 

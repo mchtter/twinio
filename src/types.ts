@@ -54,6 +54,7 @@ export interface RuleRoad {
   pts: V2[];
   width: number;
   cls: RoadClass;
+  sidewalks: boolean;
 }
 
 export interface ParsedTile {

@@ -247,7 +247,7 @@ export function parseTile(
         if (pts.length < 2) continue;
         // rule geometry is claim-independent: clearance/junction rules must see
         // roads rendered by neighbouring tiles too
-        ruleRoads.push({ id, pts, width, cls: def.cls });
+        ruleRoads.push({ id, pts, width, cls: def.cls, sidewalks: def.sidewalks && tags['sidewalk'] !== 'no' });
         if (!claim(id)) continue;
         roads.push({
           id,
