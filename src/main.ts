@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config';
 import { GeoProjection } from './geo/proj';
 import { ElevationManager } from './terrain/sources';
+import { onOverpassRateLimit } from './data/overpass';
 import { TerrainManager } from './terrain/terrain';
 import { World } from './world/tileManager';
 import { CollisionIndex } from './world/collision';
@@ -94,6 +95,9 @@ refreshOverlay();
 elevation.onSourceChange = (name) => hud.showToast(`Copernicus DEM erişilemedi → ${name} kullanılıyor`);
 
 world.onError = (msg) => hud.showToast(msg);
+onOverpassRateLimit((sec) =>
+  hud.showToast(`OSM sunucusu yoğun (429) — ~${sec} sn beklenip otomatik denenecek`, Math.min(sec, 12) * 1000),
+);
 
 // ---------- boot / teleport ----------
 let booted = false;

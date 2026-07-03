@@ -29,6 +29,31 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Global rate-limit cooldown: one 429 pauses ALL Overpass traffic with
+ * exponential backoff — hammering a throttled server only extends the ban. */
+let cooldownUntil = 0;
+let cooldownStep = 0;
+let rateLimitHandler: ((seconds: number) => void) | undefined;
+
+export function onOverpassRateLimit(cb: (seconds: number) => void): void {
+  rateLimitHandler = cb;
+}
+
+function tripCooldown(): void {
+  cooldownStep = Math.min(cooldownStep + 1, 5);
+  const dur = Math.min(15000 * 2 ** (cooldownStep - 1), 240000);
+  const until = Date.now() + dur;
+  if (until > cooldownUntil) {
+    cooldownUntil = until;
+    rateLimitHandler?.(Math.round(dur / 1000));
+  }
+}
+
+async function waitCooldown(): Promise<void> {
+  const wait = cooldownUntil - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
 function buildQuery(s: number, w: number, n: number, e: number): string {
   const bbox = `${s.toFixed(6)},${w.toFixed(6)},${n.toFixed(6)},${e.toFixed(6)}`;
   return `[out:json][timeout:60][bbox:${bbox}];
@@ -59,11 +84,14 @@ export async function fetchOsmTile(z: number, x: number, y: number): Promise<Ove
 
   const b = tileBounds(z, x, y);
   const query = buildQuery(b.south, b.west, b.north, b.east);
+  // spread tiles across mirrors so one server carries half the load
+  const epOffset = Math.abs(x + y) % CONFIG.overpassEndpoints.length;
 
   return slot(async () => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const endpoint = CONFIG.overpassEndpoints[attempt % CONFIG.overpassEndpoints.length];
+      await waitCooldown();
+      const endpoint = CONFIG.overpassEndpoints[(epOffset + attempt) % CONFIG.overpassEndpoints.length];
       try {
         // hard timeout: a hung connection must not clog the fetch queue
         const resp = await fetch(endpoint, {
@@ -72,14 +100,20 @@ export async function fetchOsmTile(z: number, x: number, y: number): Promise<Ove
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           signal: AbortSignal.timeout(CONFIG.overpassTimeoutMs),
         });
-        if (resp.status === 429 || resp.status === 504) {
-          lastErr = new Error(`overpass ${resp.status}`);
-          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        if (resp.status === 429) {
+          lastErr = new Error('overpass 429');
+          tripCooldown();
+          continue;
+        }
+        if (resp.status === 504) {
+          lastErr = new Error('overpass 504');
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
           continue;
         }
         if (!resp.ok) throw new Error(`overpass ${resp.status}`);
         const json = await resp.json();
         const elements = (json.elements ?? []) as OverpassElement[];
+        cooldownStep = 0; // healthy again
         cacheSet(key, elements);
         return elements;
       } catch (e) {

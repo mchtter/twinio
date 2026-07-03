@@ -31,6 +31,9 @@ export class World {
   private tiles = new Map<string, TileEntry>();
   private claims = new Map<string, string>();
   private hidden = new Set<string>();
+  // failed tiles wait before re-queueing — prevents a 429 retry storm
+  private retryAt = new Map<string, number>();
+  private lastErrorToast = 0;
   // 24m grid hash of traffic signals for fast "red light ahead?" vehicle queries
   private signalCells = new Map<string, SignalPoint[]>();
   private loadingCount = 0;
@@ -88,6 +91,8 @@ export class World {
             }
             continue;
           }
+          const retry = this.retryAt.get(key);
+          if (retry && retry > Date.now()) continue; // back off after failure
           this.startLoad(cx + dx, cy + dy, mode, key);
         }
       }
@@ -101,11 +106,17 @@ export class World {
   }
 
   private startLoad(x: number, y: number, mode: TileMode, key: string): void {
-    this.loadTile(x, y, mode).catch((e) => {
-      console.warn('tile load failed', key, e);
-      this.tiles.delete(key);
-      this.onError?.('OSM verisi alınamadı — tekrar denenecek');
-    });
+    this.loadTile(x, y, mode)
+      .then(() => this.retryAt.delete(key))
+      .catch((e) => {
+        console.warn('tile load failed', key, e);
+        this.tiles.delete(key);
+        this.retryAt.set(key, Date.now() + 25000);
+        if (Date.now() - this.lastErrorToast > 10000) {
+          this.lastErrorToast = Date.now();
+          this.onError?.('OSM verisi alınamadı — otomatik yeniden denenecek');
+        }
+      });
   }
 
   reset(): void {
