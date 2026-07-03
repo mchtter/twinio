@@ -88,16 +88,16 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
   }
   let geo: THREE.BufferGeometry;
   try {
-    geo = new THREE.ShapeGeometry(shape);
+    geo = new THREE.ShapeGeometry(shape).toNonIndexed();
   } catch {
     return null;
   }
   geo.rotateX(-Math.PI / 2); // (sx, sy, 0) -> (sx, 0, -sy) = local (x, 0, z)
-  const pos = geo.getAttribute('position');
-  const uv = geo.getAttribute('uv');
 
   if (a.kind === 'water') {
-    // water is a flat sheet slightly below the lowest shore point
+    // water is a flat sheet slightly below the lowest shore point — no draping
+    const pos = geo.getAttribute('position');
+    const uv = geo.getAttribute('uv');
     let minH = Infinity;
     for (const p of a.outer) {
       const h = sample(p.x, p.z);
@@ -106,18 +106,65 @@ function polygonGeometry(a: AreaSpec, sample: HeightSampler): THREE.BufferGeomet
     if (!isFinite(minH)) minH = 0;
     const y = Math.max(minH - 0.3, -0.2);
     for (let i = 0; i < pos.count; i++) pos.setY(i, y);
-  } else {
-    for (let i = 0; i < pos.count; i++) {
-      pos.setY(i, sample(pos.getX(i), pos.getZ(i)) + CONFIG.yArea);
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, pos.getX(i), pos.getZ(i));
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  // Engine rule: big flat triangles cut through undulating terrain (sunken
+  // areas + z-fighting). Refine every triangle by 4-way subdivision until its
+  // longest edge is below the terrain feature scale, THEN drape each vertex.
+  const src = geo.getAttribute('position').array as Float32Array;
+  geo.dispose();
+  const area = polygonAreaAbs(a.outer);
+  // adapt threshold so a huge forest can't explode the vertex budget (~20k tris)
+  const threshold = Math.max(16, Math.sqrt((2 * area) / 20000));
+  const out: number[] = [];
+  const stack: number[][] = [];
+  for (let i = 0; i < src.length; i += 9) {
+    stack.push([src[i], src[i + 2], src[i + 3], src[i + 5], src[i + 6], src[i + 8]]);
+  }
+  while (stack.length > 0) {
+    const t = stack.pop()!;
+    const [x1, z1, x2, z2, x3, z3] = t;
+    const e1 = Math.hypot(x2 - x1, z2 - z1);
+    const e2 = Math.hypot(x3 - x2, z3 - z2);
+    const e3 = Math.hypot(x1 - x3, z1 - z3);
+    if (Math.max(e1, e2, e3) <= threshold || out.length > 360000) {
+      out.push(...t);
+      continue;
     }
+    const mx1 = (x1 + x2) / 2, mz1 = (z1 + z2) / 2;
+    const mx2 = (x2 + x3) / 2, mz2 = (z2 + z3) / 2;
+    const mx3 = (x3 + x1) / 2, mz3 = (z3 + z1) / 2;
+    stack.push(
+      [x1, z1, mx1, mz1, mx3, mz3],
+      [mx1, mz1, x2, z2, mx2, mz2],
+      [mx3, mz3, mx2, mz2, x3, z3],
+      [mx1, mz1, mx2, mz2, mx3, mz3],
+    );
   }
-  // world-space uvs in meters (textures set their own repeat scale)
-  for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, pos.getX(i), pos.getZ(i));
+
+  // overlapping OSM areas (e.g. park + grass duplicates) get distinct offsets
+  const yOff = CONFIG.yArea + ((hashStr(a.id) % 100) / 100) * 0.04;
+  const n = out.length / 2;
+  const pos = new Float32Array(n * 3);
+  const uvArr = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const x = out[i * 2];
+    const z = out[i * 2 + 1];
+    pos[i * 3] = x;
+    pos[i * 3 + 1] = sample(x, z) + yOff;
+    pos[i * 3 + 2] = z;
+    uvArr[i * 2] = x;
+    uvArr[i * 2 + 1] = z;
   }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
+  const refined = new THREE.BufferGeometry();
+  refined.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  refined.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+  refined.computeVertexNormals();
+  return refined;
 }
 
 let treeGeo: THREE.BufferGeometry | undefined;
