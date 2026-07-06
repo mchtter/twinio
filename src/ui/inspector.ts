@@ -8,7 +8,7 @@ export interface InspectContext {
   z: number;
   terrain: number;
   cat?: string;
-  vehicle?: { speed: number; cruise: number; highway?: string } | null;
+  vehicle?: { speed: number; cruise: number; highway?: string; lane?: number; lanes?: number } | null;
 }
 
 const CAT_TR: Record<string, string> = {
@@ -69,6 +69,7 @@ export function renderInspectorHtml(r: InspectResult, ctx: InspectContext): stri
         'Hareketli araç',
         `<div>Hız: <b>${(ctx.vehicle.speed * 3.6).toFixed(0)} km/s</b> (seyir ${(ctx.vehicle.cruise * 3.6).toFixed(0)})` +
           (ctx.vehicle.highway ? ` · yol: ${esc(ctx.vehicle.highway)}` : '') +
+          (ctx.vehicle.lane && ctx.vehicle.lanes ? ` · şerit: ${ctx.vehicle.lane}/${ctx.vehicle.lanes}` : '') +
           `</div>`,
       ),
     );

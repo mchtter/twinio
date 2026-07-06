@@ -337,6 +337,7 @@ export function parseTile(
           width,
           highway: hw,
           oneway: tags['oneway'] === 'yes' || hw.startsWith('motorway'),
+          lanes: isFinite(lanes) && lanes > 0 ? lanes : undefined,
           sidewalks,
           lamps: def.lamps && !lvl.tunnel && !lvl.bridge,
           ...lvl,

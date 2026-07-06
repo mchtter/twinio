@@ -12,12 +12,81 @@ interface Car {
   edge: GraphEdge | null;
   d: number;
   sign: number;
-  speed: number; // cruise speed for the current edge
-  v: number;     // current speed (accelerates / brakes toward a target)
+  speed: number;    // cruise speed for the current edge
+  v: number;        // current speed
+  lane: number;     // occupied/target lane (0 = rightmost)
+  laneFrom: number; // source lane while a change animates
+  laneT: number;    // lateral blend laneFrom→lane; 1 = settled
+  think: number;    // seconds until the next lane-change consideration
+}
+
+interface Slot {
+  d: number;
+  sign: number;
+  v: number;
+  lane: number;
+  laneFrom: number;
+  laneT: number;
 }
 
 /** Distance to a blocking (non-green) signal ahead, or Infinity. */
 export type SignalQuery = (pos: THREE.Vector3, dir: THREE.Vector3) => number;
+
+// --- IDM (Intelligent Driver Model) — one law for leaders, red lights, zebras ---
+const IDM_A = 2.5;  // max acceleration m/s²
+const IDM_B = 3.0;  // comfortable deceleration
+const IDM_T = 1.4;  // desired time headway s
+const IDM_S0 = 2.0; // standstill jam gap m
+const CAR_LEN = 4.5;
+const LANE_CHANGE_TIME = 1.4;
+
+/** IDM acceleration toward an obstacle `gap` meters ahead moving at `vLead`
+ * (Infinity gap = free road). Negative result brakes; capped at -9 (emergency). */
+function idmAccel(v: number, v0: number, gap: number, vLead: number): number {
+  const free = 1 - Math.pow(v / Math.max(v0, 0.1), 4);
+  if (!isFinite(gap)) return IDM_A * free;
+  const sStar = IDM_S0 + Math.max(0, v * IDM_T + (v * (v - vLead)) / (2 * Math.sqrt(IDM_A * IDM_B)));
+  return Math.max(IDM_A * (free - (sStar / Math.max(gap, 0.1)) ** 2), -9);
+}
+
+/** A car mid-change occupies BOTH lanes until it settles. */
+function occupies(s: Slot, lane: number): boolean {
+  return s.lane === lane || (s.laneT < 1 && s.laneFrom === lane);
+}
+
+/** Nearest car ahead of `d` (travel direction `sign`) in `lane`, as bumper gap. */
+function leaderIn(slots: Slot[] | undefined, d: number, sign: number, lane: number) {
+  let gap = Infinity;
+  let v = 0;
+  if (slots) {
+    for (const s of slots) {
+      if (s.sign !== sign || !occupies(s, lane)) continue;
+      const g = (sign > 0 ? s.d - d : d - s.d) - CAR_LEN;
+      if (g > -CAR_LEN + 0.01 && g < gap) {
+        gap = g;
+        v = s.v;
+      }
+    }
+  }
+  return { gap, v };
+}
+
+/** Nearest car behind `d` in `lane` — safety check before merging in front of it. */
+function followerIn(slots: Slot[] | undefined, d: number, sign: number, lane: number) {
+  let gap = Infinity;
+  let v = 0;
+  if (slots) {
+    for (const s of slots) {
+      if (s.sign !== sign || !occupies(s, lane)) continue;
+      const g = (sign > 0 ? d - s.d : s.d - d) - CAR_LEN;
+      if (g > -CAR_LEN + 0.01 && g < gap) {
+        gap = g;
+        v = s.v;
+      }
+    }
+  }
+  return { gap, v };
+}
 
 let carGeo: THREE.BufferGeometry | undefined;
 
@@ -72,7 +141,7 @@ export class VehicleSystem {
     this.mesh.count = CONFIG.maxVehicles;
     const c = new THREE.Color();
     for (let i = 0; i < CONFIG.maxVehicles; i++) {
-      this.cars.push({ edge: null, d: 0, sign: 1, speed: 10, v: 0 });
+      this.cars.push({ edge: null, d: 0, sign: 1, speed: 10, v: 0, lane: 0, laneFrom: 0, laneT: 1, think: 0 });
       this.mesh.setColorAt(i, c.copy(CAR_COLORS[i % CAR_COLORS.length]));
       this.tmpM.compose(this.zero, this.tmpQ.identity(), this.zero);
       this.mesh.setMatrixAt(i, this.tmpM);
@@ -91,10 +160,10 @@ export class VehicleSystem {
   }
 
   /** Inspector: live state of a car instance. */
-  carInfo(i: number): { speed: number; cruise: number; highway?: string } | null {
+  carInfo(i: number): { speed: number; cruise: number; highway?: string; lane?: number; lanes?: number } | null {
     const c = this.cars[i];
     if (!c || !c.edge) return null;
-    return { speed: c.v, cruise: c.speed, highway: c.edge.highway };
+    return { speed: c.v, cruise: c.speed, highway: c.edge.highway, lane: c.lane + 1, lanes: c.edge.lanes };
   }
 
   update(
@@ -107,8 +176,8 @@ export class VehicleSystem {
     const target = Math.min(CONFIG.maxVehicles, Math.floor((graph.totalLength / 90) * this.densityScale));
     let activeCount = 0;
 
-    // per-edge occupancy for car-following (leader gap)
-    const occupancy = new Map<number, { d: number; sign: number; v: number }[]>();
+    // per-edge occupancy for car-following and lane changes (leader/follower gaps)
+    const occupancy = new Map<number, Slot[]>();
     for (const car of this.cars) {
       if (!car.edge || !graph.edges.has(car.edge.id)) continue;
       let arr = occupancy.get(car.edge.id);
@@ -116,7 +185,7 @@ export class VehicleSystem {
         arr = [];
         occupancy.set(car.edge.id, arr);
       }
-      arr.push({ d: car.d, sign: car.sign, v: car.v });
+      arr.push({ d: car.d, sign: car.sign, v: car.v, lane: car.lane, laneFrom: car.laneFrom, laneT: car.laneT });
     }
 
     for (let i = 0; i < this.cars.length; i++) {
@@ -138,6 +207,10 @@ export class VehicleSystem {
           car.d = Math.random() * e.len;
           car.speed = e.speed * (0.75 + Math.random() * 0.4);
           car.v = car.speed * 0.5;
+          car.lane = Math.floor(Math.random() * e.lanes);
+          car.laneFrom = car.lane;
+          car.laneT = 1;
+          car.think = Math.random();
         }
       }
 
@@ -151,37 +224,52 @@ export class VehicleSystem {
       graph.posAt(car.edge, car.d, this.tmpPos);
       graph.dirAt(car.edge, car.d, car.sign, this.tmpDir);
 
-      // --- desired speed: cruise, then brake for red lights and leaders ---
-      let desired = car.speed;
+      // --- IDM: the most restrictive of leader / red light / occupied zebra wins ---
+      const slots = occupancy.get(car.edge.id);
+      const lead = leaderIn(slots, car.d, car.sign, car.lane);
+      let acc = idmAccel(car.v, car.speed, lead.gap, lead.v);
+      if (car.laneT < 1) {
+        // still straddling the source lane: respect its leader too
+        const old = leaderIn(slots, car.d, car.sign, car.laneFrom);
+        acc = Math.min(acc, idmAccel(car.v, car.speed, old.gap, old.v));
+      }
       if (signalAhead) {
         const sd = signalAhead(this.tmpPos, this.tmpDir);
-        if (sd < 5) desired = 0;
-        else if (sd < 22) desired = Math.min(desired, (sd - 5) * 0.7);
+        if (isFinite(sd)) acc = Math.min(acc, idmAccel(car.v, car.speed, sd - 3.0, 0));
       }
-      // yield to pedestrians on a zebra ahead (stop a car-length short of it)
       if (crossingAhead) {
         const cd = crossingAhead(this.tmpPos, this.tmpDir);
-        if (cd < 4.5) desired = 0;
-        else if (cd < 18) desired = Math.min(desired, (cd - 4.5) * 0.8);
+        if (isFinite(cd)) acc = Math.min(acc, idmAccel(car.v, car.speed, cd - 3.5, 0));
       }
-      const others = occupancy.get(car.edge.id);
-      if (others) {
-        let gap = Infinity;
-        let leaderV = 0;
-        for (const o of others) {
-          if (o.sign !== car.sign) continue;
-          const g = car.sign > 0 ? o.d - car.d : car.d - o.d;
-          if (g > 0.01 && g < gap) {
-            gap = g;
-            leaderV = o.v;
+      car.v = Math.max(0, car.v + acc * dt);
+
+      // --- lane changes: overtake left for a clear gain, drift back right ---
+      car.think -= dt;
+      if (car.laneT < 1) {
+        car.laneT = Math.min(1, car.laneT + dt / LANE_CHANGE_TIME);
+      } else if (
+        car.think <= 0 && car.edge.lanes > 1 && car.v > 2 &&
+        car.d > 12 && car.d < car.edge.len - 12
+      ) {
+        car.think = 0.8 + Math.random() * 0.6;
+        for (const target of [car.lane - 1, car.lane + 1]) {
+          if (target < 0 || target >= car.edge.lanes) continue;
+          const tLead = leaderIn(slots, car.d, car.sign, target);
+          const tFol = followerIn(slots, car.d, car.sign, target);
+          // safety: room in the gap, and the new follower never brakes hard
+          if (tLead.gap < IDM_S0 + 2) continue;
+          if (tFol.gap < IDM_S0 + 2 || idmAccel(tFol.v, tFol.v, tFol.gap, car.v) < -IDM_B) continue;
+          const gain = idmAccel(car.v, car.speed, tLead.gap, tLead.v) - acc;
+          const wantRight = target < car.lane && gain > -0.15; // keep right unless it costs
+          const wantLeft = target > car.lane && gain > 0.5;    // overtake for a clear win
+          if (wantRight || wantLeft) {
+            car.laneFrom = car.lane;
+            car.lane = target;
+            car.laneT = 0;
+            break;
           }
         }
-        if (gap < 7) desired = Math.min(desired, Math.max(leaderV - 1, 0));
-        if (gap < 5) desired = 0;
       }
-      // accelerate 2.5 m/s², brake 7 m/s²
-      if (car.v < desired) car.v = Math.min(car.v + 2.5 * dt, desired);
-      else car.v = Math.max(car.v - 7 * dt, desired);
 
       car.d += car.v * car.sign * dt;
       if (car.d >= car.edge.len || car.d <= 0) {
@@ -196,12 +284,19 @@ export class VehicleSystem {
         car.d = car.sign > 0 ? 0 : next.len;
         car.edge = next;
         car.speed = next.speed * (0.75 + Math.random() * 0.4);
+        // settle any in-progress change at the node; clamp to the new lane count
+        car.lane = Math.min(car.lane, next.lanes - 1);
+        car.laneFrom = car.lane;
+        car.laneT = 1;
       }
 
       graph.posAt(car.edge, car.d, this.tmpPos);
       graph.dirAt(car.edge, car.d, car.sign, this.tmpDir);
-      // lane offset: keep right of the centerline (right = cross(dir, up) = (-dz, 0, dx))
-      const lane = 1.6;
+      // lateral placement: lane centers sit at halfW - laneW*(i+0.5) right of the
+      // centerline (right = cross(dir, up) = (-dz, 0, dx)); changes blend smoothly
+      const off = (l: number) => car.edge!.halfW - car.edge!.laneW * (l + 0.5);
+      const t = car.laneT < 1 ? car.laneT * car.laneT * (3 - 2 * car.laneT) : 1;
+      const lane = off(car.laneFrom) * (1 - t) + off(car.lane) * t;
       this.tmpPos.x += -this.tmpDir.z * lane;
       this.tmpPos.z += this.tmpDir.x * lane;
       this.tmpDir.y = 0;

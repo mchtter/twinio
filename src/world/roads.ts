@@ -27,7 +27,7 @@ export interface JunctionInfo {
 export interface RoadBuildResult {
   group: THREE.Object3D | null;
   /** center polylines with elevation, for the vehicle graph */
-  drivable: { pts: THREE.Vector3[]; highway: string; oneway: boolean }[];
+  drivable: { pts: THREE.Vector3[]; highway: string; oneway: boolean; width: number; lanes?: number }[];
   /** polylines pedestrians can walk (footpaths + sidewalks) */
   walkable: THREE.Vector3[][];
   /** junction plates owned (claimed) by this tile — inspector data */
@@ -396,8 +396,9 @@ export function buildRoads(
 
       // agents follow the same profile — cars/pedestrians really cross the span
       const pts3 = pts.map((p, i) => new THREE.Vector3(p.x, prof[i] + yOff + 0.05, p.z));
-      if (r.cls !== 'path') drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
-      else walkable.push(pts3);
+      if (r.cls !== 'path') {
+        drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway, width: r.width, lanes: r.lanes });
+      } else walkable.push(pts3);
       continue;
     }
 
@@ -440,7 +441,9 @@ export function buildRoads(
     const full = subdividePolyline(r.pts, CONFIG.roadSubdivision);
     if (r.cls !== 'path') {
       const pts3 = full.map((p, i) => new THREE.Vector3(p.x, probedHeight(full, i, sample) + yOff + 0.05, p.z));
-      if (pts3.length >= 2) drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway });
+      if (pts3.length >= 2) {
+        drivable.push({ pts: pts3, highway: r.highway, oneway: r.oneway, width: r.width, lanes: r.lanes });
+      }
     } else {
       walkable.push(full.map((p, i) => new THREE.Vector3(p.x, probedHeight(full, i, sample) + yOff + 0.05, p.z)));
     }

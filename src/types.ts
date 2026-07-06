@@ -30,6 +30,8 @@ export interface RoadSpec {
   width: number;
   highway: string;
   oneway: boolean;
+  /** total lane count from the OSM `lanes` tag (both directions), if tagged */
+  lanes?: number;
   sidewalks: boolean;
   lamps: boolean;
   bridge: boolean;

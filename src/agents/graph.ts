@@ -15,6 +15,11 @@ export interface GraphEdge {
   speed: number;
   oneway: boolean;
   highway: string;
+  /** lanes PER DIRECTION (1–3) — from the OSM `lanes` tag, else road width */
+  lanes: number;
+  /** lane width; lane i (0 = rightmost/kerb) centers at halfW - laneW*(i+0.5) */
+  laneW: number;
+  halfW: number;
 }
 
 const SPEEDS: Record<string, number> = {
@@ -36,7 +41,10 @@ export class RoadGraph {
   totalLength = 0;
   version = 0;
 
-  addTile(tile: string, drivable: { pts: THREE.Vector3[]; highway: string; oneway: boolean }[]): void {
+  addTile(
+    tile: string,
+    drivable: { pts: THREE.Vector3[]; highway: string; oneway: boolean; width: number; lanes?: number }[],
+  ): void {
     const ids: number[] = [];
     for (const d of drivable) {
       if (d.pts.length < 2) continue;
@@ -46,6 +54,13 @@ export class RoadGraph {
       }
       const len = cum[cum.length - 1];
       if (len < 4) continue;
+      // per-direction lane count: tagged total split by direction, else inferred
+      // from the carriageway width (~3.4 m per lane)
+      const dirWidth = d.oneway ? d.width : d.width / 2;
+      const lanes = Math.min(
+        3,
+        Math.max(1, Math.round(d.lanes ? (d.oneway ? d.lanes : d.lanes / 2) : dirWidth / 3.4)),
+      );
       const edge: GraphEdge = {
         id: this.nextId++,
         tile,
@@ -57,6 +72,9 @@ export class RoadGraph {
         speed: SPEEDS[d.highway] ?? 8,
         oneway: d.oneway,
         highway: d.highway,
+        lanes,
+        laneW: dirWidth / lanes,
+        halfW: d.width / 2,
       };
       this.edges.set(edge.id, edge);
       ids.push(edge.id);

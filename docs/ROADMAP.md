@@ -32,7 +32,7 @@
 - [x] Trafik yoğunluk kancası: `__twinio.setTrafficDensity(f)` + arter ağırlıklı doğma — Google/Yandex trafik katmanı bağlanınca yol bazlı yoğunluk buradan sürülecek
 - [x] Kavşak faz planları: sinyaller en yakın kavşağa bağlanır, karşılıklı kollar aynı fazda, dik kollar zıt yarım döngüde (çakışan yeşil imkânsız); kavşak başına deterministik kayma
 - [x] Yaya geçitlerine uyma: üzerinde yaya olan zebranın önünde araçlar durur (yaya konumları 8 m grid hash)
-- [ ] Tam IDM araç takip modeli, şerit değiştirme
+- [x] Tam IDM araç takip modeli (tek fren yasası: önder araç / kırmızı ışık / dolu zebra) + şerit değiştirme (sol'dan sollama, sağa dönüş; `lanes` etiketi/genişlikten yön-başı şerit sayısı)
 - [ ] Yoğunluk ısı haritası katmanı, O-D matrisi ile talep üretimi
 
 ## Faz 3 — Akıllı kavşak sistemleri
