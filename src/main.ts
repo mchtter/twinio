@@ -14,7 +14,9 @@ import { Environment } from './core/environment';
 import { Hud } from './ui/hud';
 import { renderInspectorHtml } from './ui/inspector';
 import { TrafficFibers } from './scenario/trafficFlow';
+import { InfraLayer } from './scenario/infrastructure';
 import { setHoloLook } from './world/materials';
+import type { ScenarioName } from './ui/hud';
 
 const params = new URLSearchParams(location.search);
 const startLat = parseFloat(params.get('lat') ?? '') || CONFIG.origin.lat;
@@ -60,23 +62,28 @@ const controls = new PlayerControls(camera, renderer.domElement, terrain.sample,
   collision.resolve(x, z, r),
 );
 
-// ---------- traffic-flow scenario (holographic city + live flow fibers) ----------
+// ---------- scenarios (holographic city + data overlays) ----------
 const fibers = new TrafficFibers(scene);
-let scenarioOn = false;
+const infra = new InfraLayer(scene);
+let activeScenario: ScenarioName | null = null;
 
-function setTrafficScenario(on: boolean): void {
-  if (on === scenarioOn) return;
-  scenarioOn = on;
-  setHoloLook(on);
-  env.setHolo(on);
-  terrain.setHolo(on);
-  fibers.setActive(on);
-  hud.showToast(
-    on
-      ? 'Trafik yoğunluğu senaryosu: fiber hızı = araç hızı, renk = akıcılık (camgöbeği→kırmızı)'
-      : 'Senaryo kapatıldı',
-    6000,
-  );
+const SCENARIO_TOASTS: Record<ScenarioName, string> = {
+  traffic: 'Trafik yoğunluğu: fiber hızı = araç hızı, renk = akıcılık (camgöbeği→kırmızı)',
+  infra: 'Altyapı: su (mavi) + kanalizasyon (yeşil, yokuş aşağı) cadde ağından türetilmiş TAHMİNİ şebeke; pipeline/rögar/hidrant gerçek OSM verisi',
+};
+
+function setScenario(name: ScenarioName | null): void {
+  if (name === activeScenario) return;
+  const holo = name !== null;
+  if (holo !== (activeScenario !== null)) {
+    setHoloLook(holo);
+    env.setHolo(holo);
+    terrain.setHolo(holo);
+  }
+  activeScenario = name;
+  fibers.setActive(name === 'traffic');
+  infra.setActive(name === 'infra');
+  hud.showToast(name ? SCENARIO_TOASTS[name] : 'Senaryo kapatıldı', 7000);
 }
 
 const hud = new Hud({
@@ -99,7 +106,7 @@ const hud = new Hud({
     await teleport(hit.lat, hit.lon);
   },
   onLockRequest: () => controls.requestLock(),
-  onScenarioToggle: (on) => setTrafficScenario(on),
+  onScenarioSelect: (name) => setScenario(name),
   onInspectorClose: () => {
     marker.visible = false;
   },
@@ -268,7 +275,8 @@ function loop(): void {
       (p, d) => world.pedCrossingAhead(p, d, (x, z, r) => pedestrians.anyNear(x, z, r)),
     );
     for (const s of world.signalSets()) s.update(simTime);
-    if (scenarioOn) fibers.update(dt, graph, (out) => vehicles.edgeFlows(out));
+    if (activeScenario === 'traffic') fibers.update(dt, graph, (out) => vehicles.edgeFlows(out));
+    else if (activeScenario === 'infra') infra.update(dt, graph, () => world.infraData(), terrain.sampleOriginal);
   }
   env.update(dt, camera.position, () => world.allLampHeads());
 
@@ -311,9 +319,10 @@ loop();
   inspect: (x: number, z: number) => world.features.query(x, z),
   // Faz 6 hook: live congestion feeds scale traffic here
   setTrafficDensity: (f: number) => vehicles.setDensity(f),
-  // scenario toggle from code (e2e + console); keeps the HUD button in sync
-  setScenario: (on: boolean) => {
-    document.getElementById('scenario-traffic')?.classList.toggle('on', on);
-    setTrafficScenario(on);
+  // scenario switch from code (e2e + console); keeps the HUD buttons in sync
+  setScenario: (name: ScenarioName | boolean | null) => {
+    const n = name === true ? 'traffic' : name === false ? null : name;
+    hud.setScenario(n);
+    setScenario(n);
   },
 };

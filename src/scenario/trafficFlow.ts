@@ -19,7 +19,7 @@ interface Range {
   count: number;
 }
 
-const VERT = /* glsl */ `
+export const FIBER_VERT = /* glsl */ `
 attribute float aU;
 attribute float aSide;
 attribute vec4 aFlow; // rgb = fluidity color * brightness, w = pulse speed m/s
@@ -34,7 +34,7 @@ void main() {
 }
 `;
 
-const FRAG = /* glsl */ `
+export const FIBER_FRAG = /* glsl */ `
 uniform float uTime;
 varying float vU;
 varying float vSide;
@@ -73,8 +73,8 @@ export class TrafficFibers {
   constructor(scene: THREE.Scene) {
     this.mat = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 } },
-      vertexShader: VERT,
-      fragmentShader: FRAG,
+      vertexShader: FIBER_VERT,
+      fragmentShader: FIBER_FRAG,
       transparent: true,
       depthWrite: false,
       // no depth test: the renderer's logarithmic depth buffer would reject a

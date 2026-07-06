@@ -66,7 +66,7 @@ export const CONFIG = {
   overpassConcurrency: 2,
   overpassTimeoutMs: 45000,
   osmCacheTtlMs: 7 * 24 * 3600 * 1000,
-  osmCacheVersion: 2, // bump when the Overpass query changes (invalidates cache)
+  osmCacheVersion: 3, // bump when the Overpass query changes (invalidates cache)
   terrariumUrl: (z: number, x: number, y: number) =>
     `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,
   // Copernicus GLO-30 COGs — OpenTopography mirror (CORS + range requests enabled;

@@ -51,6 +51,7 @@
 
 ## Faz 5 — Platform
 
+- [x] Altyapı senaryo katmanı (yeraltı görünümü): cadde ağından türetilmiş TAHMİNİ su (mavi, basınçlı hızlı akış) + kanalizasyon (yeşil, yokuş aşağı akış) şebekesi, kavşak/aralık rögarları; OSM'deki gerçek pipeline/rögar/hidrant verisi üstüne bindirilir — kurum verisi (GeoJSON/WFS) bağlanınca gerçek şebeke geometrisi aynı render'a girecek
 - [ ] Belediye/kurum verisi entegrasyonu (GeoJSON/WFS yükleme)
 - [ ] Çoklu kullanıcı (paylaşılan görünüm), zaman çizelgesi kaydı/oynatma
 - [ ] 3D Tiles / CityGML içe aktarma

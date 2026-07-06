@@ -53,7 +53,17 @@ export interface AreaSpec {
   tags?: Record<string, string>;
 }
 
-export type PoiKind = 'lamp' | 'signal' | 'crossing' | 'tree';
+export type PoiKind = 'lamp' | 'signal' | 'crossing' | 'tree' | 'hydrant' | 'manhole';
+
+/** Real mapped utility line (man_made=pipeline) — sparse in OSM; the
+ * infrastructure scenario renders these alongside the synthesized network. */
+export interface UtilitySpec {
+  id: string;
+  pts: V2[];
+  substance: string; // water | sewage | gas | … ('' if untagged)
+  location: string;  // underground | overground | ''
+  tags?: Record<string, string>;
+}
 
 export interface PoiSpec {
   id: string;
@@ -81,6 +91,7 @@ export interface ParsedTile {
   roads: RoadSpec[];
   areas: AreaSpec[];
   pois: PoiSpec[];
+  utilities: UtilitySpec[];
   ruleRoads: RuleRoad[];
   /** natural=coastline ways (claim-independent; each tile clips its own sea) */
   coastlines: V2[][];

@@ -14,6 +14,7 @@ import { subdividePolyline } from './geomUtils';
 import { RoadGraph } from '../agents/graph';
 import { PedestrianSystem } from '../agents/pedestrians';
 import { CollisionIndex, FootprintGrid, RoadClearanceGrid } from './collision';
+import type { PoiSpec, UtilitySpec } from '../types';
 
 type TileMode = 'full' | 'light';
 
@@ -27,6 +28,9 @@ interface TileEntry {
   lampHeads: THREE.Vector3[];
   signalPoints: SignalPoint[];
   crossingPoints: CrossingPoint[];
+  /** infrastructure scenario data: real mapped pipelines + hydrant/manhole POIs */
+  utilities: UtilitySpec[];
+  infraPois: PoiSpec[];
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -76,6 +80,17 @@ export class World {
     for (const t of this.tiles.values()) {
       for (const h of t.lampHeads) yield h;
     }
+  }
+
+  /** Everything the infrastructure scenario overlays: real pipelines + utility POIs. */
+  infraData(): { utilities: UtilitySpec[]; pois: PoiSpec[] } {
+    const utilities: UtilitySpec[] = [];
+    const pois: PoiSpec[] = [];
+    for (const t of this.tiles.values()) {
+      utilities.push(...t.utilities);
+      pois.push(...t.infraPois);
+    }
+    return { utilities, pois };
   }
 
   /** Called when the camera moved; loads/upgrades/unloads tiles as needed. */
@@ -140,7 +155,8 @@ export class World {
     const key = tileKey(z, x, y);
     const gen = this.generation;
     const entry: TileEntry = {
-      key, x, y, mode, group: null, signals: null, lampHeads: [], signalPoints: [], crossingPoints: [],
+      key, x, y, mode, group: null, signals: null, lampHeads: [],
+      signalPoints: [], crossingPoints: [], utilities: [], infraPois: [],
     };
     this.tiles.set(key, entry);
     this.loadingCount++;
@@ -161,6 +177,8 @@ export class World {
         return true;
       };
       const parsed = parseTile(elements, this.terrain.proj, claim);
+      entry.utilities = parsed.utilities;
+      entry.infraPois = parsed.pois.filter((p) => p.kind === 'hydrant' || p.kind === 'manhole');
       // world geometry drapes on the PRISTINE surface: tunnel cuts only open
       // the terrain mesh, so at-grade roads/areas bridge over the trench
       const sample = this.terrain.sampleOriginal;

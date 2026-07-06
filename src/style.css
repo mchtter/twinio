@@ -41,7 +41,8 @@ canvas { display: block; }
 }
 #search-box button:hover, .btn:hover { background: #27506f; }
 
-.scen-btn { width: 100%; text-align: left; }
+.scen-btn { width: 100%; text-align: left; display: block; }
+.scen-btn + .scen-btn { margin-top: 5px; }
 .scen-btn.on {
   background: #0b2b3f; color: #4ff7ff; border-color: #37e0ff;
   box-shadow: 0 0 10px rgba(60, 220, 255, 0.35), inset 0 0 8px rgba(60, 220, 255, 0.15);

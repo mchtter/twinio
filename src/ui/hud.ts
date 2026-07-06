@@ -1,14 +1,21 @@
 import { CONFIG } from '../config';
 
+export type ScenarioName = 'traffic' | 'infra';
+
 export interface HudCallbacks {
   onHourChange: (hour: number) => void;
   onLayerToggle: (cat: string, visible: boolean) => void;
   onSearch: (query: string) => void;
   onLockRequest: () => void;
   onShadowToggle: (on: boolean) => void;
-  onScenarioToggle: (on: boolean) => void;
+  onScenarioSelect: (name: ScenarioName | null) => void;
   onInspectorClose?: () => void;
 }
+
+const SCENARIOS: [string, ScenarioName, string][] = [
+  ['scenario-traffic', 'traffic', '🚦 Trafik Yoğunluğu'],
+  ['scenario-infra', 'infra', '🚰 Altyapı (Yeraltı)'],
+];
 
 const LAYERS: [string, string][] = [
   ['buildings', 'Binalar'],
@@ -56,7 +63,7 @@ export class Hud {
         </div>
         <div class="panel">
           <div class="sec">Senaryo</div>
-          <button id="scenario-traffic" class="btn scen-btn">🚦 Trafik Yoğunluğu</button>
+          ${SCENARIOS.map(([id, , label]) => `<button id="${id}" class="btn scen-btn">${label}</button>`).join('')}
         </div>
       </div>
       <div id="hud-help" class="hud panel">
@@ -103,10 +110,15 @@ export class Hud {
       cb.onShadowToggle((e.target as HTMLInputElement).checked);
     });
 
-    const scenBtn = document.getElementById('scenario-traffic')!;
-    scenBtn.addEventListener('click', () => {
-      cb.onScenarioToggle(scenBtn.classList.toggle('on'));
-    });
+    // scenario buttons are mutually exclusive; clicking the active one exits
+    for (const [id, name] of SCENARIOS) {
+      const btn = document.getElementById(id)!;
+      btn.addEventListener('click', () => {
+        const on = !btn.classList.contains('on');
+        this.setScenario(on ? name : null);
+        cb.onScenarioSelect(on ? name : null);
+      });
+    }
 
     const input = document.getElementById('search-input') as HTMLInputElement;
     const go = () => {
@@ -145,6 +157,13 @@ export class Hud {
 
   setMode(mode: string): void {
     this.modeLabel.textContent = mode === 'walk' ? 'YÜRÜME' : 'izometrik';
+  }
+
+  /** Reflect the active scenario on the buttons (also used by the code hook). */
+  setScenario(name: ScenarioName | null): void {
+    for (const [id, n] of SCENARIOS) {
+      document.getElementById(id)!.classList.toggle('on', n === name);
+    }
   }
 
   showToast(msg: string, ms = 4000): void {

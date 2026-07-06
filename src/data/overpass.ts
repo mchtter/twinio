@@ -1,7 +1,9 @@
 import { CONFIG } from '../config';
 import { tileBounds, tileKey, GeoProjection } from '../geo/proj';
 import { cacheGet, cacheSet } from '../geo/cache';
-import type { ParsedTile, BuildingSpec, RoadSpec, AreaSpec, PoiSpec, V2, RoadClass, AreaKind, RuleRoad } from '../types';
+import type {
+  ParsedTile, BuildingSpec, RoadSpec, AreaSpec, PoiSpec, UtilitySpec, V2, RoadClass, AreaKind, RuleRoad,
+} from '../types';
 
 interface OverpassElement {
   type: 'node' | 'way' | 'relation';
@@ -74,6 +76,10 @@ function buildQuery(s: number, w: number, n: number, e: number): string {
   node["highway"="traffic_signals"];
   node["highway"="crossing"];
   node["natural"="tree"];
+  node["emergency"="fire_hydrant"];
+  node["manhole"];
+  node["man_made"="manhole"];
+  way["man_made"="pipeline"];
 );
 out geom;`;
 }
@@ -263,6 +269,7 @@ export function parseTile(
   const roads: RoadSpec[] = [];
   const areas: AreaSpec[] = [];
   const pois: PoiSpec[] = [];
+  const utilities: UtilitySpec[] = [];
   const ruleRoads: RuleRoad[] = [];
   const coastlines: V2[][] = [];
 
@@ -276,6 +283,8 @@ export function parseTile(
       else if (tags['highway'] === 'traffic_signals') kind = 'signal';
       else if (tags['highway'] === 'crossing') kind = 'crossing';
       else if (tags['natural'] === 'tree') kind = 'tree';
+      else if (tags['emergency'] === 'fire_hydrant') kind = 'hydrant';
+      else if (tags['manhole'] || tags['man_made'] === 'manhole') kind = 'manhole';
       if (kind && claim(id)) {
         const w = proj.toWorld(el.lat, el.lon);
         pois.push({ id, x: w.x, z: w.z, kind, tags });
@@ -345,6 +354,21 @@ export function parseTile(
         });
         continue;
       }
+      // real mapped utility lines (sparse — the infra scenario overlays them)
+      if (tags['man_made'] === 'pipeline') {
+        if (!claim(id)) continue;
+        utilities.push({
+          id,
+          pts: el.geometry.map((g) => {
+            const w = proj.toWorld(g.lat, g.lon);
+            return { x: w.x, z: w.z };
+          }),
+          substance: tags['substance'] ?? tags['type'] ?? '',
+          location: tags['location'] ?? '',
+          tags,
+        });
+        continue;
+      }
       // areas (closed ways)
       if (isClosed(el.geometry)) {
         const kind = classifyArea(tags);
@@ -389,7 +413,7 @@ export function parseTile(
     }
   }
 
-  return { buildings, roads, areas, pois, ruleRoads, coastlines };
+  return { buildings, roads, areas, pois, utilities, ruleRoads, coastlines };
 }
 
 /** Canonical building use for styling — building tag first, then POI tags. */

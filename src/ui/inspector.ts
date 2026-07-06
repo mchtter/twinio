@@ -29,6 +29,7 @@ const KIND_TR: Record<string, string> = {
 
 const POI_TR: Record<string, string> = {
   lamp: 'Sokak lambası', signal: 'Trafik ışığı', crossing: 'Yaya geçidi', tree: 'Ağaç',
+  hydrant: 'Yangın hidrantı', manhole: 'Rögar (menhol)',
 };
 
 function esc(s: string): string {
