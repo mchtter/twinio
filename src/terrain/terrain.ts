@@ -27,6 +27,13 @@ export interface TerrainCut {
   halfWidth: number;
 }
 
+/** Bridge deck corridor whose DSM ridge must be pressed out of the terrain. */
+export interface BridgeShadow {
+  id: string;
+  pts: V2[];
+  halfWidth: number;
+}
+
 /** Streams DEM terrain tiles around the camera and provides height sampling
  * for every other layer (buildings, roads, props, agents, player). */
 export class TerrainManager {
@@ -35,6 +42,8 @@ export class TerrainManager {
   private material: THREE.MeshStandardMaterial;
   private cuts = new Map<string, TerrainCut>();
   private cutBoxes = new Map<string, { minX: number; maxX: number; minZ: number; maxZ: number }>();
+  private shadows = new Map<string, BridgeShadow>();
+  private shadowBoxes = new Map<string, { minX: number; maxX: number; minZ: number; maxZ: number }>();
   // sea polygons: the radar DSM is meters-noisy over straits/bays — terrain
   // under known water is pressed below the sea sheet so it can't poke through
   private waterZones = new Map<string, { polys: V2[][]; box: { minX: number; maxX: number; minZ: number; maxZ: number } }>();
@@ -81,6 +90,8 @@ export class TerrainManager {
     this.loading.clear();
     this.cuts.clear(); // cuts live in world coords — invalid after re-projection
     this.cutBoxes.clear();
+    this.shadows.clear();
+    this.shadowBoxes.clear();
     this.waterZones.clear();
     this.proj = proj;
   }
@@ -168,6 +179,68 @@ export class TerrainManager {
     }
   }
 
+  /** Register bridge/viaduct corridors. The Copernicus DSM is a SURFACE model:
+   * the deck leaves a ridge in the height data, so ground under a viaduct
+   * bulges to deck height and anything draped there (terrain, at-grade roads)
+   * rides the bulge. Vertices inside the corridor whose height pokes above the
+   * clean heights sampled just OUTSIDE the corridor are pressed down — in BOTH
+   * grid and orig, since the imprint is spurious data, not real ground.
+   * Idempotent per way id; applies to loaded + future tiles. */
+  registerBridgeShadows(shadows: BridgeShadow[]): void {
+    const fresh = shadows.filter((s) => s.pts.length >= 2 && !this.shadows.has(s.id));
+    if (fresh.length === 0) return;
+    for (const s of fresh) {
+      this.shadows.set(s.id, s);
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const p of s.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.z < minZ) minZ = p.z;
+        if (p.z > maxZ) maxZ = p.z;
+      }
+      const pad = s.halfWidth + 2;
+      this.shadowBoxes.set(s.id, { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad });
+    }
+    for (const t of this.tiles.values()) {
+      let changed = false;
+      for (const s of fresh) {
+        if (this.applyShadow(t, s)) changed = true;
+      }
+      if (changed) this.rebuildTile(t);
+    }
+  }
+
+  private applyShadow(t: TerrainTile, s: BridgeShadow): boolean {
+    const n = CONFIG.terrainGrid;
+    const size = n + 1;
+    const box = this.shadowBoxes.get(s.id)!;
+    if (box.maxX < t.xs[0] || box.minX > t.xs[n] || box.maxZ < t.zs[0] || box.minZ > t.zs[n]) return false;
+    let changed = false;
+    const off = s.halfWidth + 9;
+    for (let j = 0; j < size; j++) {
+      const vz = t.zs[j];
+      if (vz < box.minZ || vz > box.maxZ) continue;
+      for (let i = 0; i < size; i++) {
+        const vx = t.xs[i];
+        if (vx < box.minX || vx > box.maxX) continue;
+        const hit = nearestOnLine(s.pts, vx, vz);
+        if (hit.d > s.halfWidth) continue;
+        // clean ground = the sides of the corridor, untouched by the deck ridge
+        const hA = this.sampleGrid(t, hit.px + hit.nx * off, hit.pz + hit.nz * off, t.orig);
+        const hB = this.sampleGrid(t, hit.px - hit.nx * off, hit.pz - hit.nz * off, t.orig);
+        if (hA === null && hB === null) continue;
+        const ref = hA !== null && hB !== null ? (hA + hB) / 2 : (hA ?? hB)!;
+        const k = j * size + i;
+        if (t.grid[k] > ref + 0.8) {
+          t.grid[k] = ref;
+          t.orig[k] = ref;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
   /** Register a data tile's water polygons; presses the terrain under them
    * down to seabed on every loaded + future terrain tile. Idempotent per id. */
   registerWaterAreas(id: string, polys: V2[][]): void {
@@ -245,6 +318,7 @@ export class TerrainManager {
       mesh: null as unknown as THREE.Mesh,
       grid, orig: grid.slice(), xs, zs, mask: null, maskTex: null, tx, ty,
     };
+    for (const s of this.shadows.values()) this.applyShadow(tile, s);
     for (const c of this.cuts.values()) this.applyCut(tile, c);
     for (const w of this.waterZones.values()) this.applyWater(tile, w);
     tile.mesh = this.buildMesh(tile, n);
@@ -270,28 +344,14 @@ export class TerrainManager {
     if (cMaxX + pad < xs[0] || cMinX - pad > xs[n] || cMaxZ + pad < zs[0] || cMinZ - pad > zs[n]) return false;
 
     let changed = false;
-    // 1) vertex lowering: any grid vertex within halfWidth of the centerline
-    //    drops to the corridor floor — the trench banks form from the mesh itself
-    for (let j = 0; j < size; j++) {
-      const vz = zs[j];
-      if (vz < cMinZ - pad || vz > cMaxZ + pad) continue;
-      for (let i = 0; i < size; i++) {
-        const vx = xs[i];
-        if (vx < cMinX - pad || vx > cMaxX + pad) continue;
-        const hit = nearestOnCut(cut, vx, vz);
-        if (hit.d <= cut.halfWidth) {
-          const target = hit.y - 0.35;
-          const k = j * size + i;
-          if (t.grid[k] > target) {
-            t.grid[k] = target;
-            changed = true;
-          }
-        }
-      }
-    }
-    // 2) discard mask: only where the corridor is genuinely buried (orig terrain
-    //    above the floor) — portals at grade stay untouched
-    const S = 512;
+    // Engine rule: coarse grid vertices are NEVER lowered into the trench — at
+    // ~30 m vertex spacing that carved giant triangular craters far wider than
+    // the corridor. The trench interior is the road ribbon + retaining walls;
+    // the surface is only OPENED by the discard mask. Walk-mode descent comes
+    // from the cut-aware `sample` override instead.
+    // Discard mask: only where the corridor is genuinely buried (orig terrain
+    // above the floor) — portals at grade stay untouched
+    const S = 1024;
     const tileW = xs[n] - xs[0];
     const tileH = zs[n] - zs[0];
     const rPx = ((cut.halfWidth - 0.5) / tileW) * S;
@@ -475,8 +535,22 @@ export class TerrainManager {
     };
   }
 
-  /** Bilinear height sample at world coords (current surface, incl. cuts). */
-  sample = this.samplerFor((t) => t.grid);
+  private gridSample = this.samplerFor((t) => t.grid);
+
+  /** Height at world coords as the PLAYER experiences it: the rendered surface,
+   * except inside tunnel corridors where it descends to the trench floor (the
+   * mesh only gets a discard hole there — no lowered vertices to stand on). */
+  sample = (x: number, zc: number): number => {
+    let h = this.gridSample(x, zc);
+    for (const c of this.cuts.values()) {
+      const b = this.cutBoxes.get(c.id);
+      if (b && (x < b.minX || x > b.maxX || zc < b.minZ || zc > b.maxZ)) continue;
+      const hit = nearestOnCut(c, x, zc);
+      const floor = hit.y - 0.35;
+      if (hit.d <= c.halfWidth && h > floor) h = floor;
+    }
+    return h;
+  };
 
   /** Pristine DEM sample (pre-cut). World geometry drapes on THIS — the cut
    * only opens the terrain mesh, so at-grade roads bridge over the trench. */
@@ -513,6 +587,33 @@ export class TerrainManager {
   get tileCount(): number {
     return this.tiles.size;
   }
+}
+
+/** Closest point on a polyline: distance, projection and unit perpendicular. */
+function nearestOnLine(
+  pts: V2[],
+  x: number,
+  z: number,
+): { d: number; px: number; pz: number; nx: number; nz: number } {
+  let best = { d: Infinity, px: x, pz: z, nx: 0, nz: 1 };
+  for (let s = 1; s < pts.length; s++) {
+    const a = pts[s - 1];
+    const b = pts[s];
+    const abx = b.x - a.x;
+    const abz = b.z - a.z;
+    const l2 = abx * abx + abz * abz;
+    if (l2 < 1e-9) continue;
+    let t = ((x - a.x) * abx + (z - a.z) * abz) / l2;
+    t = Math.min(Math.max(t, 0), 1);
+    const px = a.x + abx * t;
+    const pz = a.z + abz * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < best.d) {
+      const l = Math.sqrt(l2);
+      best = { d, px, pz, nx: -abz / l, nz: abx / l };
+    }
+  }
+  return best;
 }
 
 /** Closest point on a cut centerline: distance + interpolated floor height. */

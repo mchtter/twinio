@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 
-export type ScenarioName = 'traffic' | 'infra';
+export type ScenarioName = 'traffic' | 'infra' | 'quake';
 
 export interface HudCallbacks {
   onHourChange: (hour: number) => void;
@@ -15,6 +15,7 @@ export interface HudCallbacks {
 const SCENARIOS: [string, ScenarioName, string][] = [
   ['scenario-traffic', 'traffic', '🚦 Trafik Yoğunluğu'],
   ['scenario-infra', 'infra', '🚰 Altyapı (Yeraltı)'],
+  ['scenario-quake', 'quake', '🌋 Deprem'],
 ];
 
 const LAYERS: [string, string][] = [

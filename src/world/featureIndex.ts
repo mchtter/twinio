@@ -56,6 +56,18 @@ export class FeatureIndex {
     this.tiles.delete(key);
   }
 
+  /** Raw building specs of one tile (earthquake scenario rebuilds from these). */
+  buildingsOf(key: string): BuildingSpec[] | null {
+    const t = this.tiles.get(key);
+    return t ? t.buildings.map((b) => b.spec) : null;
+  }
+
+  *allBuildings(): IterableIterator<{ key: string; spec: BuildingSpec }> {
+    for (const [key, t] of this.tiles) {
+      for (const b of t.buildings) yield { key, spec: b.spec };
+    }
+  }
+
   /** Collect every feature at/near a world point. */
   query(x: number, z: number): InspectResult {
     const out: InspectResult = { roads: [], areas: [] };

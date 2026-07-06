@@ -312,7 +312,10 @@ export function buildRoads(
 
   for (const r of roads) {
     if (r.pts.length < 2) continue;
-    const jitter = ((hashStr(r.id) % 1000) / 1000) * CONFIG.yRoadJitter;
+    // jitter keyed by street name/ref when present: consecutive OSM ways of the
+    // SAME road land in the same y-band — no more paper-seam steps mid-street.
+    // Distinct overlapping roads rarely share a name, so anti-z-fight holds.
+    const jitter = ((hashStr(r.tags?.['name'] ?? r.tags?.['ref'] ?? r.id) % 1000) / 1000) * CONFIG.yRoadJitter;
     const yOff =
       (r.cls === 'major' ? CONFIG.yRoadMajor : r.cls === 'minor' ? CONFIG.yRoadMinor : CONFIG.yPath) + jitter;
     const vMeters = r.cls === 'major' ? 8 : 6;

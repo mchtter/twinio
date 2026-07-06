@@ -113,6 +113,46 @@ export class RoadGraph {
     this.version++;
   }
 
+  /** Sever one edge (rubble/roadblock). Returns it for a later restore. */
+  removeEdge(id: number): GraphEdge | null {
+    const e = this.edges.get(id);
+    if (!e) return null;
+    this.edges.delete(id);
+    this.totalLength -= e.len;
+    for (const nk of [e.a, e.b]) {
+      const arr = this.nodes.get(nk);
+      if (arr) {
+        const i = arr.indexOf(id);
+        if (i >= 0) arr.splice(i, 1);
+        if (arr.length === 0) this.nodes.delete(nk);
+      }
+    }
+    const tileArr = this.byTile.get(e.tile);
+    if (tileArr) {
+      const i = tileArr.indexOf(id);
+      if (i >= 0) tileArr.splice(i, 1);
+    }
+    this.version++;
+    return e;
+  }
+
+  /** Re-insert a severed edge — no-op if its tile has been unloaded meanwhile. */
+  restoreEdge(e: GraphEdge): void {
+    if (this.edges.has(e.id) || !this.byTile.has(e.tile)) return;
+    this.edges.set(e.id, e);
+    this.totalLength += e.len;
+    for (const nk of [e.a, e.b]) {
+      let arr = this.nodes.get(nk);
+      if (!arr) {
+        arr = [];
+        this.nodes.set(nk, arr);
+      }
+      arr.push(e.id);
+    }
+    this.byTile.get(e.tile)!.push(e.id);
+    this.version++;
+  }
+
   /** Sample position along an edge into `out`. */
   posAt(e: GraphEdge, dist: number, out: THREE.Vector3): void {
     const d = Math.min(Math.max(dist, 0), e.len);

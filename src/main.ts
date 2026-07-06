@@ -15,6 +15,7 @@ import { Hud } from './ui/hud';
 import { renderInspectorHtml } from './ui/inspector';
 import { TrafficFibers } from './scenario/trafficFlow';
 import { InfraLayer } from './scenario/infrastructure';
+import { EarthquakeScenario } from './scenario/earthquake';
 import { setHoloLook } from './world/materials';
 import type { ScenarioName } from './ui/hud';
 
@@ -62,27 +63,33 @@ const controls = new PlayerControls(camera, renderer.domElement, terrain.sample,
   collision.resolve(x, z, r),
 );
 
-// ---------- scenarios (holographic city + data overlays) ----------
+// ---------- scenarios (data overlays + simulations) ----------
 const fibers = new TrafficFibers(scene);
 const infra = new InfraLayer(scene);
+const quake = new EarthquakeScenario(scene);
 let activeScenario: ScenarioName | null = null;
 
 const SCENARIO_TOASTS: Record<ScenarioName, string> = {
   traffic: 'Trafik yoğunluğu: fiber hızı = araç hızı, renk = akıcılık (camgöbeği→kırmızı)',
   infra: 'Altyapı: su (mavi) + kanalizasyon (yeşil, yokuş aşağı) cadde ağından türetilmiş TAHMİNİ şebeke; pipeline/rögar/hidrant gerçek OSM verisi',
+  quake: 'Deprem senaryosu: start_date etiketi varsa ≥15 yaş kuralı, yoksa rastgele çökme; enkaz yolları kapatabilir. Çıkınca şehir eski haline döner',
 };
 
 function setScenario(name: ScenarioName | null): void {
   if (name === activeScenario) return;
-  const holo = name !== null;
-  if (holo !== (activeScenario !== null)) {
+  const prev = activeScenario;
+  activeScenario = name;
+  // hologram look belongs to the data-overlay scenarios; the quake plays in daylight
+  const holo = name === 'traffic' || name === 'infra';
+  if (holo !== (prev === 'traffic' || prev === 'infra')) {
     setHoloLook(holo);
     env.setHolo(holo);
     terrain.setHolo(holo);
   }
-  activeScenario = name;
   fibers.setActive(name === 'traffic');
   infra.setActive(name === 'infra');
+  if (prev === 'quake') quake.stop(world, graph);
+  if (name === 'quake') quake.start(world, graph, camera.position, terrain.sampleOriginal);
   hud.showToast(name ? SCENARIO_TOASTS[name] : 'Senaryo kapatıldı', 7000);
 }
 
@@ -243,6 +250,7 @@ async function boot(lat: number, lon: number): Promise<void> {
 
 // ---------- main loop ----------
 const clock = new THREE.Clock();
+const shakeTmp = new THREE.Vector3();
 let streamTimer = 0;
 let statTimer = 0;
 let frames = 0;
@@ -277,10 +285,15 @@ function loop(): void {
     for (const s of world.signalSets()) s.update(simTime);
     if (activeScenario === 'traffic') fibers.update(dt, graph, (out) => vehicles.edgeFlows(out));
     else if (activeScenario === 'infra') infra.update(dt, graph, () => world.infraData(), terrain.sampleOriginal);
+    else if (activeScenario === 'quake') quake.update(dt);
   }
   env.update(dt, camera.position, () => world.allLampHeads());
 
+  // quake camera shake wraps the render only — controls never see the offset
+  const sh = quake.shake(shakeTmp);
+  camera.position.add(sh);
   renderer.render(scene, camera);
+  camera.position.sub(sh);
 
   statTimer -= dt;
   if (statTimer <= 0) {
@@ -319,6 +332,7 @@ loop();
   inspect: (x: number, z: number) => world.features.query(x, z),
   // Faz 6 hook: live congestion feeds scale traffic here
   setTrafficDensity: (f: number) => vehicles.setDensity(f),
+  quakeDebug: () => quake.debugState(),
   // scenario switch from code (e2e + console); keeps the HUD buttons in sync
   setScenario: (name: ScenarioName | boolean | null) => {
     const n = name === true ? 'traffic' : name === false ? null : name;

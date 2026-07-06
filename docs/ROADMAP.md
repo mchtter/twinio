@@ -44,7 +44,8 @@
 
 ## Faz 4 — Afet & acil durum simülasyonları
 
-- [ ] **Deprem**: bina hasar olasılık modeli (yaş/kat/zemin proxy'leri), hasar görselleştirme, enkaz-yol kapanması
+- [x] **Deprem (ilk sürüm)**: senaryo butonu → kamera sarsıntısı + prosedürel gürültü sesi (WebAudio, asset'siz), bakılan bölgede kademeli bina çökmesi (`start_date` varsa ≥15 yaş kuralı yüksek olasılık, yoksa rastgele), enkaz yığınları + enkazın yol kapatması (araç grafiği kenarı kesilir, trafik o yoldan kaybolur); çıkışta şehir/graf tam geri yüklenir
+- [ ] Deprem hasar modelini derinleştirme: kat sayısı/zemin proxy'leri, hasar dereceleri (hafif/orta/ağır), İTÜ/AFAD katsayıları
 - [ ] **Acil toplanma alanları**: kapasite analizi, yürüme mesafesi izokronları, en yakın alan atama
 - [ ] **Tahliye**: yaya akış simülasyonu (sosyal kuvvet modeli), darboğaz tespiti
 - [ ] Senaryo editörü: yol kapatma, alan tanımlama, rapor çıktısı

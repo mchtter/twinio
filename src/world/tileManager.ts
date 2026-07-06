@@ -82,6 +82,28 @@ export class World {
     }
   }
 
+  /** Rebuild one tile's building meshes without `excludeIds` (earthquake
+   * collapses). An empty set restores the full original skyline. */
+  setCollapsedBuildings(key: string, excludeIds: Set<string>): void {
+    const t = this.tiles.get(key);
+    const specs = this.features.buildingsOf(key);
+    if (!t?.group || !specs) return;
+    for (const o of t.group.children.filter((c) => c.userData.cat === 'buildings')) {
+      t.group.remove(o);
+      o.traverse((m) => {
+        if (m instanceof THREE.Mesh && !m.geometry.userData.shared) m.geometry.dispose();
+      });
+    }
+    const rebuilt = buildBuildings(
+      excludeIds.size === 0 ? specs : specs.filter((b) => !excludeIds.has(b.id)),
+      this.terrain.sampleOriginal,
+    );
+    if (rebuilt) {
+      t.group.add(rebuilt);
+      this.applyVisibility(t.group);
+    }
+  }
+
   /** Everything the infrastructure scenario overlays: real pipelines + utility POIs. */
   infraData(): { utilities: UtilitySpec[]; pois: PoiSpec[] } {
     const utilities: UtilitySpec[] = [];
@@ -186,6 +208,14 @@ export class World {
       const group = new THREE.Group();
       group.name = `tile-${key}`;
       const light = mode === 'light';
+
+      // engine rule: bridge-deck DSM ridges are pressed out of the terrain
+      // BEFORE anything drapes or profiles against it — ground under viaducts
+      // must be real ground, not the deck's radar imprint.
+      const shadows = parsed.ruleRoads
+        .filter((r) => r.bridge && r.pts.length >= 2)
+        .map((r) => ({ id: r.id, pts: subdividePolyline(r.pts, 15), halfWidth: r.width / 2 + 4 }));
+      if (shadows.length > 0) this.terrain.registerBridgeShadows(shadows);
 
       // engine rule: underpass corridors carve the terrain BEFORE anything
       // drapes on it — the trench floor and the tunnel road share one profile.
