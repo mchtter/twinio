@@ -66,6 +66,10 @@ export class Hud {
           <div class="sec">Senaryo</div>
           ${SCENARIOS.map(([id, , label]) => `<button id="${id}" class="btn scen-btn">${label}</button>`).join('')}
         </div>
+        <div class="panel hidden" id="scenario-report">
+          <div class="sec" id="scenario-report-title">Rapor</div>
+          <div id="scenario-report-body"></div>
+        </div>
       </div>
       <div id="hud-help" class="hud panel">
         Mod: <b id="mode-label">izometrik</b> · <b>tık</b> incele · <b>F</b> mod değiştir · <b>sürükle</b> kaydır · <b>sağ tık / Q·E</b> döndür · <b>tekerlek</b> zoom · <b>WASD</b> hareket · <b>Shift</b> hızlı
@@ -165,6 +169,18 @@ export class Hud {
     for (const [id, n] of SCENARIOS) {
       document.getElementById(id)!.classList.toggle('on', n === name);
     }
+  }
+
+  /** Live scenario report card under the buttons; null hides it. */
+  setScenarioReport(title: string, html: string | null): void {
+    const panel = document.getElementById('scenario-report')!;
+    if (html === null) {
+      panel.classList.add('hidden');
+      return;
+    }
+    document.getElementById('scenario-report-title')!.textContent = title;
+    document.getElementById('scenario-report-body')!.innerHTML = html;
+    panel.classList.remove('hidden');
   }
 
   showToast(msg: string, ms = 4000): void {

@@ -88,9 +88,35 @@ function setScenario(name: ScenarioName | null): void {
   }
   fibers.setActive(name === 'traffic');
   infra.setActive(name === 'infra');
-  if (prev === 'quake') quake.stop(world, graph);
-  if (name === 'quake') quake.start(world, graph, camera.position, terrain.sampleOriginal);
+  if (prev === 'quake') {
+    quake.stop(world, graph);
+    hud.setScenarioReport('', null);
+  }
+  if (name === 'quake') quake.start(world, graph, lookFocus(), terrain.sampleOriginal);
   hud.showToast(name ? SCENARIO_TOASTS[name] : 'Senaryo kapatıldı', 7000);
+}
+
+/** Ground point the camera looks at — scenarios act on what the USER sees,
+ * not on the camera's own (often far-behind) position. */
+function lookFocus(): THREE.Vector3 {
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const rc = new THREE.Raycaster(camera.position.clone(), dir);
+  const hit = rc.intersectObjects(terrain.group.children, false)[0];
+  return hit ? hit.point : camera.position;
+}
+
+function quakeReportHtml(): string {
+  const r = quake.report();
+  const pct = r.scanned > 0 ? Math.round((r.victims / r.scanned) * 100) : 0;
+  return (
+    `<div>Sarsıntı: <b>${r.shaking ? 'sürüyor' : 'bitti'}</b></div>` +
+    `<div>Taranan bina: <b>${r.scanned}</b> <span class="dim">(yapım yılı verili: ${r.dated})</span></div>` +
+    `<div>Yıkılan: <b>${r.fallen}/${r.victims}</b> <span class="dim">(%${pct} — yaş kuralı ${r.byAge} · rastgele ${r.byChance})</span></div>` +
+    `<div>Kapanan yol: <b>${r.blockedEdges} kesim</b> <span class="dim">· ~${Math.round(r.blockedMeters)} m</span></div>` +
+    (r.dated === 0
+      ? `<div class="dim" style="margin-top:4px">Bu bölgede OSM'de yapım yılı (start_date) verisi yok — çökme rastgele seçildi</div>`
+      : '')
+  );
 }
 
 const hud = new Hud({
@@ -297,6 +323,7 @@ function loop(): void {
 
   statTimer -= dt;
   if (statTimer <= 0) {
+    if (activeScenario === 'quake') hud.setScenarioReport('🌋 Deprem Raporu', quakeReportHtml());
     fps = frames / (0.5 - Math.min(statTimer, 0));
     frames = 0;
     statTimer = 0.5;
@@ -332,7 +359,7 @@ loop();
   inspect: (x: number, z: number) => world.features.query(x, z),
   // Faz 6 hook: live congestion feeds scale traffic here
   setTrafficDensity: (f: number) => vehicles.setDensity(f),
-  quakeDebug: () => quake.debugState(),
+  quakeDebug: () => quake.report(),
   // scenario switch from code (e2e + console); keeps the HUD buttons in sync
   setScenario: (name: ScenarioName | boolean | null) => {
     const n = name === true ? 'traffic' : name === false ? null : name;

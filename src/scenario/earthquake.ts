@@ -12,8 +12,9 @@ import { World } from '../world/tileManager';
  * from the blocked segment and route around it). Exiting the scenario restores
  * the skyline, the graph and the silence exactly as they were. */
 
-const VICTIM_RADIUS = 420; // only the area being looked at collapses
+const VICTIM_RADIUS = 420; // around the LOOKED-AT ground point, not the camera
 const MAX_VICTIMS = 90;
+const MIN_VICTIMS = 12; // the scenario must never play out empty
 const FALL_DURATION = 2.4;
 const SHAKE_END = 9;
 
@@ -48,24 +49,35 @@ export class EarthquakeScenario {
   private rubbleMat = new THREE.MeshStandardMaterial({ color: 0x847e73, roughness: 1 });
   private audioCtx: AudioContext | null = null;
   private graph: RoadGraph | null = null;
+  private stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0 };
 
   constructor(scene: THREE.Scene) {
     this.group.visible = false;
     scene.add(this.group);
   }
 
-  start(world: World, graph: RoadGraph, camPos: THREE.Vector3, sample: HeightSampler): void {
+  start(world: World, graph: RoadGraph, focus: THREE.Vector3, sample: HeightSampler): void {
     this.stopInternal(world, graph); // safety: never double-start
     this.active = true;
     this.t = 0;
     this.graph = graph;
     this.group.visible = true;
     this.startRumble();
+    this.stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0 };
 
-    // ---- pick victims around the viewpoint ----
+    // ---- candidates around the looked-at ground point ----
     const yrNow = new Date().getFullYear();
+    interface Cand {
+      key: string;
+      spec: BuildingSpec;
+      cx: number;
+      cz: number;
+      d: number;
+      old: boolean | null; // start_date verdict; null = untagged
+    }
+    const picked: Cand[] = [];
+    const spared: Cand[] = [];
     for (const { key, spec } of world.features.allBuildings()) {
-      if (this.victims.length >= MAX_VICTIMS) break;
       if (spec.outer.length < 3) continue;
       let cx = 0;
       let cz = 0;
@@ -75,12 +87,26 @@ export class EarthquakeScenario {
       }
       cx /= spec.outer.length;
       cz /= spec.outer.length;
-      if (Math.hypot(cx - camPos.x, cz - camPos.z) > VICTIM_RADIUS) continue;
-
+      const d = Math.hypot(cx - focus.x, cz - focus.z);
+      if (d > VICTIM_RADIUS) continue;
+      this.stats.scanned++;
       const yr = parseInt(spec.tags?.['start_date'] ?? spec.tags?.['construction_date'] ?? '', 10);
-      const chance = isFinite(yr) ? (yrNow - yr >= 15 ? 0.6 : 0.04) : 0.25;
-      if (Math.random() >= chance) continue;
+      const old = isFinite(yr) ? yrNow - yr >= 15 : null;
+      if (old !== null) this.stats.dated++;
+      const chance = old === true ? 0.6 : old === false ? 0.04 : 0.28;
+      (Math.random() < chance ? picked : spared).push({ key, spec, cx, cz, d, old });
+    }
+    // the scenario must read as a quake: top up with the nearest spared ones
+    if (picked.length < MIN_VICTIMS && spared.length > 0) {
+      spared.sort((a, b) => a.d - b.d);
+      picked.push(...spared.slice(0, MIN_VICTIMS - picked.length));
+    }
+    picked.sort((a, b) => a.d - b.d);
 
+    for (const c of picked.slice(0, MAX_VICTIMS)) {
+      const { key, spec, cx, cz } = c;
+      if (c.old === true) this.stats.byAge++;
+      else this.stats.byChance++;
       let rx = 0;
       let rz = 0;
       for (const p of spec.outer) {
@@ -109,7 +135,7 @@ export class EarthquakeScenario {
         h: spec.height,
         rx: Math.max(rx * 0.7, 2),
         rz: Math.max(rz * 0.7, 2),
-        start: 1.6 + Math.random() * 4.5,
+        start: 1.0 + Math.random() * 4.5,
         axis: new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)),
         maxTilt: 0.12 + Math.random() * 0.25,
         done: false,
@@ -180,14 +206,32 @@ export class EarthquakeScenario {
     this.stopInternal(world, graph);
   }
 
-  /** e2e/console probe. */
-  debugState(): { active: boolean; t: number; victims: number; fallen: number; blocked: number } {
+  /** Live figures for the HUD report panel (also the e2e/console probe). */
+  report(): {
+    active: boolean;
+    t: number;
+    shaking: boolean;
+    scanned: number;
+    dated: number;
+    victims: number;
+    fallen: number;
+    byAge: number;
+    byChance: number;
+    blockedEdges: number;
+    blockedMeters: number;
+  } {
     return {
       active: this.active,
       t: this.t,
+      shaking: this.active && this.t < SHAKE_END,
+      scanned: this.stats.scanned,
+      dated: this.stats.dated,
       victims: this.victims.length,
       fallen: this.victims.filter((v) => v.done).length,
-      blocked: this.removedEdges.length,
+      byAge: this.stats.byAge,
+      byChance: this.stats.byChance,
+      blockedEdges: this.removedEdges.length,
+      blockedMeters: this.removedEdges.reduce((s, e) => s + e.len, 0),
     };
   }
 
