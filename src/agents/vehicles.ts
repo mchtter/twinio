@@ -97,7 +97,13 @@ export class VehicleSystem {
     return { speed: c.v, cruise: c.speed, highway: c.edge.highway };
   }
 
-  update(dt: number, camPos: THREE.Vector3, graph: RoadGraph, signalAhead?: SignalQuery): void {
+  update(
+    dt: number,
+    camPos: THREE.Vector3,
+    graph: RoadGraph,
+    signalAhead?: SignalQuery,
+    crossingAhead?: SignalQuery,
+  ): void {
     const target = Math.min(CONFIG.maxVehicles, Math.floor((graph.totalLength / 90) * this.densityScale));
     let activeCount = 0;
 
@@ -151,6 +157,12 @@ export class VehicleSystem {
         const sd = signalAhead(this.tmpPos, this.tmpDir);
         if (sd < 5) desired = 0;
         else if (sd < 22) desired = Math.min(desired, (sd - 5) * 0.7);
+      }
+      // yield to pedestrians on a zebra ahead (stop a car-length short of it)
+      if (crossingAhead) {
+        const cd = crossingAhead(this.tmpPos, this.tmpDir);
+        if (cd < 4.5) desired = 0;
+        else if (cd < 18) desired = Math.min(desired, (cd - 4.5) * 0.8);
       }
       const others = occupancy.get(car.edge.id);
       if (others) {

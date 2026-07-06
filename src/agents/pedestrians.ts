@@ -58,6 +58,9 @@ export class PedestrianSystem {
   private lines: WalkLine[] = [];
   private peds: Ped[] = [];
   private time = 0;
+  // 8m grid of active pedestrian positions, rebuilt every update —
+  // vehicles query it for "someone on the zebra ahead?"
+  private posCells = new Map<string, number[]>();
   private tmpPos = new THREE.Vector3();
   private tmpM = new THREE.Matrix4();
   private tmpQ = new THREE.Quaternion();
@@ -110,8 +113,26 @@ export class PedestrianSystem {
     for (const p of this.peds) p.line = null;
   }
 
+  /** Any pedestrian within `r` of (x,z)? Positions are from the last update. */
+  anyNear(x: number, z: number, r: number): boolean {
+    const r2 = r * r;
+    for (let cx = Math.floor((x - r) / 8); cx <= Math.floor((x + r) / 8); cx++) {
+      for (let cz = Math.floor((z - r) / 8); cz <= Math.floor((z + r) / 8); cz++) {
+        const cell = this.posCells.get(`${cx},${cz}`);
+        if (!cell) continue;
+        for (let i = 0; i < cell.length; i += 2) {
+          const dx = cell[i] - x;
+          const dz = cell[i + 1] - z;
+          if (dx * dx + dz * dz < r2) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   update(dt: number, camPos: THREE.Vector3): void {
     this.time += dt;
+    this.posCells.clear();
     const target = Math.min(CONFIG.maxPedestrians, this.lines.length * 2);
 
     let active = 0;
@@ -150,6 +171,13 @@ export class PedestrianSystem {
       }
 
       this.posAt(p.line, p.d, this.tmpPos);
+      const ck = `${Math.floor(this.tmpPos.x / 8)},${Math.floor(this.tmpPos.z / 8)}`;
+      let cell = this.posCells.get(ck);
+      if (!cell) {
+        cell = [];
+        this.posCells.set(ck, cell);
+      }
+      cell.push(this.tmpPos.x, this.tmpPos.z);
       this.tmpPos.y += 0.03 + Math.abs(Math.sin(this.time * 7 + p.phase)) * 0.05;
       const yaw = this.headingAt(p.line, p.d, p.sign);
       this.tmpQ.setFromAxisAngle(this.up, yaw);

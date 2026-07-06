@@ -34,7 +34,7 @@ Akış döngüsü (0.5 s'de bir): kamera karosu değiştiyse eksik karolar yükl
 - **Çarpışma** (`collision.ts`): bina taban kenarları 8 m'lik uniform grid hash'e yazılır; yürüme modunda oyuncu dairesi (r=0.45) yakın kenarlardan dışarı itilir (2 geçiş, kayarak ilerleme).
 - **Yollar** (`roads.ts`): polyline → miter-join şerit (ribbon), sınıf bazlı genişlik; ana yollarda şerit çizgisi dokusu. Kaldırımlar merkez çizgiden offset. OSM `crossing` node'ları en yakın yol segmentine kenetlenip zebra decal olur. Y-ofset katmanlaması z-fighting'i önler (alan < patika < yol < kaldırım < zebra).
 - **Alanlar** (`greenery.ts`): `ShapeGeometry` araziye vertex bazında drape edilir; dünya-uzayı UV. Ağaçlar polygon içine deterministik (feature-id seed) serpilir, türe göre yoğunluk (orman > park > çim), karo başına tek `InstancedMesh`.
-- **Donatılar** (`props.ts`): OSM lamba node'ları + aydınlatılmış yollar boyunca ~27 m aralıkla prosedürel lambalar (9 m grid ile çakışma önleme). Trafik ışıkları instanced; faz döngüsü instanceColor ile sürülür.
+- **Donatılar** (`props.ts`): OSM lamba node'ları + aydınlatılmış yollar boyunca ~27 m aralıkla prosedürel lambalar (9 m grid ile çakışma önleme). Trafik ışıkları instanced; faz döngüsü instanceColor ile sürülür. **Kavşak faz planı**: her sinyal en yakın (claim-bağımsız → karo sınırında tutarlı) kavşağa bağlanır; yaklaşım yönü kavşağın ana eksenine (en geniş kolun katlanmış açısı, deterministik) göre katlanarak faz A/B seçilir — karşılıklı kollar aynı fazda, dik kollar zıt yarım döngüde. 16 sn'lik döngüde her yarım yeşil(6)+sarı(1.2)+tam-kırmızı(0.8) taşır: çakışan yeşiller yapısal olarak imkânsızdır. Kavşak konumunun hash'i döngüye kayma ekler — komşu kavşaklar senkron yanıp sönmez. Kavşaksız (orta-blok) sinyaller serbest çalışır.
 
 ## Veri bozukluğuna karşı motor kuralları
 
@@ -64,8 +64,8 @@ OSM/DEM verisi mükemmel değildir; görüntü bütünlüğünü motor garanti e
 ## Ajanlar
 
 - **Yol grafı**: OSM yolları kavşaklarda bölünmüş geldiğinden her way bir kenardır; uçlar 1 m'ye yuvarlanan düğüm anahtarlarıyla bağlanır. Karo yüklendikçe/boşaldıkça kenarlar eklenir/silinir.
-- **Araçlar**: tek `InstancedMesh` (kapasite 140). Kenar üzerinde ilerler, düğümde rastgele dönüş (oneway'e saygılı), sağ şerit ofseti, yol sınıfına göre hız. Kamera yakınında doğar, uzaklaşınca geri dönüştürülür.
-- **Yayalar**: kaldırım/patika polyline'larında gidip gelir; bob animasyonu; tek `InstancedMesh`.
+- **Araçlar**: tek `InstancedMesh` (kapasite 140). Kenar üzerinde ilerler, düğümde rastgele dönüş (oneway'e saygılı), sağ şerit ofseti, yol sınıfına göre hız. Kamera yakınında doğar, uzaklaşınca geri dönüştürülür. Fren hedefleri (ivme 2.5, fren 7 m/s²): önde kırmızı/sarı sinyal (24 m grid sorgusu), aynı kenarda öndeki araç (kuyruklanma) ve **üzerinde yaya olan zebra geçit** — geçit merkezi taşıt yolu yarı genişliği + 0.6 m yarıçapla yoklanır, kaldırımdaki yaya trafiği durdurmaz; geçidin üstündeki araç sorgudan muaftır (kilitlenme olmaz).
+- **Yayalar**: kaldırım/patika polyline'larında gidip gelir; bob animasyonu; tek `InstancedMesh`. Aktif konumlar her karede 8 m'lik grid hash'e yazılır — araçların zebra sorgusu buradan okur (yayalar araçlardan önce güncellenir).
 
 ## Işık / gölge / gece
 

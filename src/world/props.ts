@@ -5,6 +5,7 @@ import type { RoadSpec, PoiSpec, HeightSampler } from '../types';
 import { getMaterials } from './materials';
 import { hashStr } from './geomUtils';
 import { FootprintGrid, RoadClearanceGrid } from './collision';
+import type { SignalJunction } from './roads';
 
 let lampPoleGeo: THREE.BufferGeometry | undefined;
 let lampHeadGeo: THREE.BufferGeometry | undefined;
@@ -57,12 +58,46 @@ export interface PropsResult {
   signalPoints: SignalPoint[];
 }
 
-export const SIGNAL_CYCLE = 14;
+/** Two-phase cycle: each half carries green(6) + yellow(1.2) + all-red(0.8).
+ * Cross arms run the opposite half, so conflicting greens never overlap. */
+export const SIGNAL_CYCLE = 16;
 
 /** Single source of truth for the signal phase — bulbs AND vehicles use it. */
 export function signalPhase(timeSec: number, offset: number): 0 | 1 | 2 {
   const t = (timeSec + offset) % SIGNAL_CYCLE;
   return t < 6 ? 0 : t < 7.2 ? 1 : 2; // green, yellow, red
+}
+
+/** Phase plan for one signal head. The approach bearing (signal → junction
+ * center) folded against the junction's main axis picks phase A or B —
+ * opposite arms share a phase, cross arms get the complementary half. The
+ * junction position hashes to a per-junction shift so neighbouring
+ * intersections don't blink in lockstep. Junction data is claim-independent,
+ * so signals of one border junction agree across tiles. */
+function planOffset(x: number, z: number, id: string, junctions?: SignalJunction[]): number {
+  let jn: SignalJunction | null = null;
+  let best = 40; // signals stand on approach arms near their junction
+  if (junctions) {
+    for (const j of junctions) {
+      const d = Math.hypot(j.x - x, j.z - z);
+      if (d < best) {
+        best = d;
+        jn = j;
+      }
+    }
+  }
+  // mid-block pedestrian signals have no junction: free-running offset
+  if (!jn) return (hashStr(id) % (SIGNAL_CYCLE * 100)) / 100;
+  let phaseB = false;
+  if (best > 0.5) {
+    const bearing = Math.atan2(jn.z - z, jn.x - x);
+    // circular axis distance (period π): near 0 → along the main axis (phase A)
+    let rel = ((bearing - jn.axis) % Math.PI + Math.PI) % Math.PI;
+    if (rel > Math.PI / 2) rel = Math.PI - rel;
+    phaseB = rel >= Math.PI / 4;
+  }
+  const jitter = (hashStr(`${Math.round(jn.x)}_${Math.round(jn.z)}`) % (SIGNAL_CYCLE * 10)) / 10;
+  return jitter + (phaseB ? SIGNAL_CYCLE / 2 : 0);
 }
 
 /** Cycles red→green phases on instanced signal bulbs; one set per tile. */
@@ -95,6 +130,7 @@ export function buildProps(
   sample: HeightSampler,
   footprints?: FootprintGrid,
   clearance?: RoadClearanceGrid,
+  junctions?: SignalJunction[],
 ): PropsResult {
   const mats = getMaterials();
   const group = new THREE.Group();
@@ -192,7 +228,7 @@ export function buildProps(
         m.makeTranslation(p.x, y + 3.62 - k * 0.26, p.z + 0.13);
         bulbMesh.setMatrixAt(i * 3 + k, m);
       }
-      const offset = (hashStr(p.id) % 1400) / 100;
+      const offset = planOffset(p.x, p.z, p.id, junctions);
       offsets.push(offset);
       signalPoints.push({ x: p.x, z: p.z, offset });
     }

@@ -30,9 +30,9 @@
 - [x] Basit araç takibi: aynı kenarda öndeki araca yavaşlama/durma (kuyruk oluşumu)
 - [x] Otoparklarda park halinde araçlar (sıra düzeni, lot başına doluluk metadatası) — canlı doluluk API kancası hazır
 - [x] Trafik yoğunluk kancası: `__twinio.setTrafficDensity(f)` + arter ağırlıklı doğma — Google/Yandex trafik katmanı bağlanınca yol bazlı yoğunluk buradan sürülecek
+- [x] Kavşak faz planları: sinyaller en yakın kavşağa bağlanır, karşılıklı kollar aynı fazda, dik kollar zıt yarım döngüde (çakışan yeşil imkânsız); kavşak başına deterministik kayma
+- [x] Yaya geçitlerine uyma: üzerinde yaya olan zebranın önünde araçlar durur (yaya konumları 8 m grid hash)
 - [ ] Tam IDM araç takip modeli, şerit değiştirme
-- [ ] Yaya geçitlerine uyma (geçen yayaya durma)
-- [ ] Kavşak faz planları (OSM `traffic_signals` gruplaması — karşılıklı kollar aynı fazda)
 - [ ] Yoğunluk ısı haritası katmanı, O-D matrisi ile talep üretimi
 
 ## Faz 3 — Akıllı kavşak sistemleri

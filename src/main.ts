@@ -238,8 +238,13 @@ function loop(): void {
   }
 
   if (booted) {
-    vehicles.update(dt, camera.position, graph, (p, d) => world.redSignalAhead(p, d, simTime));
+    // pedestrians first: vehicles query their fresh position grid for zebras
     pedestrians.update(dt, camera.position);
+    vehicles.update(
+      dt, camera.position, graph,
+      (p, d) => world.redSignalAhead(p, d, simTime),
+      (p, d) => world.pedCrossingAhead(p, d, (x, z, r) => pedestrians.anyNear(x, z, r)),
+    );
     for (const s of world.signalSets()) s.update(simTime);
   }
   env.update(dt, camera.position, () => world.allLampHeads());

@@ -4,7 +4,7 @@ import { lon2tile, lat2tile, tileKey, tileBounds } from '../geo/proj';
 import { fetchOsmTile, parseTile } from '../data/overpass';
 import { TerrainManager, TerrainCut } from '../terrain/terrain';
 import { buildBuildings } from './buildings';
-import { buildRoads, tunnelProfile } from './roads';
+import { buildRoads, tunnelProfile, CrossingPoint } from './roads';
 import { buildAreas } from './greenery';
 import { buildParkedCars } from './parking';
 import { buildProps, TrafficSignalSet, SignalPoint, signalPhase } from './props';
@@ -26,6 +26,7 @@ interface TileEntry {
   signals: TrafficSignalSet | null;
   lampHeads: THREE.Vector3[];
   signalPoints: SignalPoint[];
+  crossingPoints: CrossingPoint[];
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -40,6 +41,8 @@ export class World {
   private lastErrorToast = 0;
   // 24m grid hash of traffic signals for fast "red light ahead?" vehicle queries
   private signalCells = new Map<string, SignalPoint[]>();
+  // same grid for zebra crossings — "pedestrian on the crossing ahead?" queries
+  private crossingCells = new Map<string, CrossingPoint[]>();
   private loadingCount = 0;
   /** click-to-inspect registry: raw specs + engine decisions per tile */
   readonly features = new FeatureIndex();
@@ -136,7 +139,9 @@ export class World {
     const z = CONFIG.dataZoom;
     const key = tileKey(z, x, y);
     const gen = this.generation;
-    const entry: TileEntry = { key, x, y, mode, group: null, signals: null, lampHeads: [], signalPoints: [] };
+    const entry: TileEntry = {
+      key, x, y, mode, group: null, signals: null, lampHeads: [], signalPoints: [], crossingPoints: [],
+    };
     this.tiles.set(key, entry);
     this.loadingCount++;
     this.emitStatus();
@@ -272,11 +277,12 @@ export class World {
       if (gen !== this.generation || this.tiles.get(key) !== entry) return;
 
       if (!light) {
-        const props = buildProps(parsed.roads, parsed.pois, sample, footprints, clearance);
+        const props = buildProps(parsed.roads, parsed.pois, sample, footprints, clearance, roads.signalJunctions);
         if (props.group) group.add(props.group);
         entry.signals = props.signals;
         entry.lampHeads = props.lampHeads;
         entry.signalPoints = props.signalPoints;
+        entry.crossingPoints = roads.crossingPoints;
         for (const sp of props.signalPoints) {
           const ck = this.signalCellKey(sp.x, sp.z);
           let arr = this.signalCells.get(ck);
@@ -285,6 +291,15 @@ export class World {
             this.signalCells.set(ck, arr);
           }
           arr.push(sp);
+        }
+        for (const cp of roads.crossingPoints) {
+          const ck = this.signalCellKey(cp.x, cp.z);
+          let arr = this.crossingCells.get(ck);
+          if (!arr) {
+            arr = [];
+            this.crossingCells.set(ck, arr);
+          }
+          arr.push(cp);
         }
         this.graph.addTile(key, roads.drivable);
         this.pedestrians.addTile(key, roads.walkable);
@@ -327,6 +342,35 @@ export class World {
     return best;
   }
 
+  /** Distance to the nearest zebra ahead that a pedestrian is on, or Infinity.
+   * `isPedNear` radius = carriageway half-width + a stepping-off margin, so
+   * pedestrians walking the sidewalk behind the kerb don't stop traffic. */
+  pedCrossingAhead(
+    pos: THREE.Vector3,
+    dir: THREE.Vector3,
+    isPedNear: (x: number, z: number, r: number) => boolean,
+  ): number {
+    let best = Infinity;
+    const cx = Math.floor((pos.x + dir.x * 12) / 24);
+    const cz = Math.floor((pos.z + dir.z * 12) / 24);
+    for (let dxc = -1; dxc <= 1; dxc++) {
+      for (let dzc = -1; dzc <= 1; dzc++) {
+        const arr = this.crossingCells.get(`${cx + dxc},${cz + dzc}`);
+        if (!arr) continue;
+        for (const c of arr) {
+          const vx = c.x - pos.x;
+          const vz = c.z - pos.z;
+          const d = Math.hypot(vx, vz);
+          if (d < 1.5 || d > 24 || d >= best) continue; // already on it → clear the crossing
+          if ((vx * dir.x + vz * dir.z) / d < 0.6) continue; // not ahead
+          if (!isPedNear(c.x, c.z, c.halfW + 0.6)) continue;
+          best = d;
+        }
+      }
+    }
+    return best;
+  }
+
   private unloadTile(key: string): void {
     const t = this.tiles.get(key);
     if (!t) return;
@@ -348,6 +392,15 @@ export class World {
         const i = arr.indexOf(sp);
         if (i >= 0) arr.splice(i, 1);
         if (arr.length === 0) this.signalCells.delete(ck);
+      }
+    }
+    for (const cp of t.crossingPoints) {
+      const ck = this.signalCellKey(cp.x, cp.z);
+      const arr = this.crossingCells.get(ck);
+      if (arr) {
+        const i = arr.indexOf(cp);
+        if (i >= 0) arr.splice(i, 1);
+        if (arr.length === 0) this.crossingCells.delete(ck);
       }
     }
     this.graph.removeTile(key);

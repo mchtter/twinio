@@ -32,6 +32,24 @@ export interface RoadBuildResult {
   walkable: THREE.Vector3[][];
   /** junction plates owned (claimed) by this tile — inspector data */
   junctions: JunctionInfo[];
+  /** ALL junctions (claim-independent) with a canonical main axis — signal phase plans */
+  signalJunctions: SignalJunction[];
+  /** zebra centers snapped on the carriageway — vehicles yield to pedestrians here */
+  crossingPoints: CrossingPoint[];
+}
+
+/** Phase-plan anchor: junction center + main axis (fold of the widest arm, [0,π)).
+ * Derived from claim-independent geometry so neighbouring tiles agree. */
+export interface SignalJunction {
+  x: number;
+  z: number;
+  axis: number;
+}
+
+export interface CrossingPoint {
+  x: number;
+  z: number;
+  halfW: number;
 }
 
 /** Topological junction: a first-class intersection object. Arms point outward
@@ -276,6 +294,22 @@ export function buildRoads(
   // first-class intersections from claim-independent geometry (cross-tile safe)
   const junctions = buildJunctions(ruleRoads ?? roads);
 
+  // phase-plan anchors: main axis = fold of the widest arm; ties resolve to the
+  // smallest fold so the pick is deterministic regardless of way order
+  const signalJunctions: SignalJunction[] = [];
+  for (const j of junctions.values()) {
+    let axis = 0;
+    let bestHw = -1;
+    for (const a of j.arms) {
+      const fold = ((Math.atan2(a.dz, a.dx) % Math.PI) + Math.PI) % Math.PI;
+      if (a.hw > bestHw + 1e-6 || (a.hw > bestHw - 1e-6 && fold < axis)) {
+        bestHw = a.hw;
+        axis = fold;
+      }
+    }
+    signalJunctions.push({ x: j.x, z: j.z, axis });
+  }
+
   for (const r of roads) {
     if (r.pts.length < 2) continue;
     const jitter = ((hashStr(r.id) % 1000) / 1000) * CONFIG.yRoadJitter;
@@ -428,11 +462,13 @@ export function buildRoads(
       roadSegs.push({ a: r.pts[i - 1], b: r.pts[i], width: r.width });
     }
   }
+  const crossingPoints: CrossingPoint[] = [];
   for (const c of crossings) {
     if (c.kind !== 'crossing') continue;
     const hit = nearestSegment(c.x, c.z, roadSegs, 15);
     if (!hit) continue;
     addCrosswalk(buckets.crosswalk, hit.px, hit.pz, hit.dx, hit.dz, hit.width, sample);
+    crossingPoints.push({ x: hit.px, z: hit.pz, halfW: hit.width / 2 });
   }
 
   const mats = getMaterials();
@@ -471,7 +507,10 @@ export function buildRoads(
     group.add(mesh);
   }
   group.userData.cat = 'roads';
-  return { group: group.children.length > 0 ? group : null, drivable, walkable, junctions: junctionInfos };
+  return {
+    group: group.children.length > 0 ? group : null,
+    drivable, walkable, junctions: junctionInfos, signalJunctions, crossingPoints,
+  };
 }
 
 /** Miter-joined ribbon along a polyline. Draped on the terrain by default;
