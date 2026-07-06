@@ -159,6 +159,22 @@ export class VehicleSystem {
     this.densityScale = Math.min(Math.max(f, 0), 4);
   }
 
+  /** Live per-edge+direction flow stats — feeds the traffic-flow scenario fibers. */
+  edgeFlows(out: Map<string, { n: number; sumV: number }>): void {
+    out.clear();
+    for (const c of this.cars) {
+      if (!c.edge) continue;
+      const k = `${c.edge.id}:${c.sign}`;
+      let f = out.get(k);
+      if (!f) {
+        f = { n: 0, sumV: 0 };
+        out.set(k, f);
+      }
+      f.n++;
+      f.sumV += c.v;
+    }
+  }
+
   /** Inspector: live state of a car instance. */
   carInfo(i: number): { speed: number; cruise: number; highway?: string; lane?: number; lanes?: number } | null {
     const c = this.cars[i];

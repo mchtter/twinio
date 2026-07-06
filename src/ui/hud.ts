@@ -6,6 +6,7 @@ export interface HudCallbacks {
   onSearch: (query: string) => void;
   onLockRequest: () => void;
   onShadowToggle: (on: boolean) => void;
+  onScenarioToggle: (on: boolean) => void;
   onInspectorClose?: () => void;
 }
 
@@ -53,6 +54,10 @@ export class Hud {
           <div class="sec">Katmanlar</div>
           <div class="grid" id="layer-grid"></div>
         </div>
+        <div class="panel">
+          <div class="sec">Senaryo</div>
+          <button id="scenario-traffic" class="btn scen-btn">🚦 Trafik Yoğunluğu</button>
+        </div>
       </div>
       <div id="hud-help" class="hud panel">
         Mod: <b id="mode-label">izometrik</b> · <b>tık</b> incele · <b>F</b> mod değiştir · <b>sürükle</b> kaydır · <b>sağ tık / Q·E</b> döndür · <b>tekerlek</b> zoom · <b>WASD</b> hareket · <b>Shift</b> hızlı
@@ -96,6 +101,11 @@ export class Hud {
 
     (document.getElementById('shadow-chk') as HTMLInputElement).addEventListener('change', (e) => {
       cb.onShadowToggle((e.target as HTMLInputElement).checked);
+    });
+
+    const scenBtn = document.getElementById('scenario-traffic')!;
+    scenBtn.addEventListener('click', () => {
+      cb.onScenarioToggle(scenBtn.classList.toggle('on'));
     });
 
     const input = document.getElementById('search-input') as HTMLInputElement;

@@ -222,6 +222,89 @@ export interface SharedMaterials {
 
 let shared: SharedMaterials | undefined;
 
+interface MatSnap {
+  color: number;
+  emissive: number;
+  emissiveIntensity: number;
+  opacity: number;
+  transparent: boolean;
+  depthWrite: boolean;
+}
+
+let holoSnaps: Map<THREE.MeshStandardMaterial, MatSnap> | null = null;
+
+/** Scenario look: the whole city turns into a dark hologram — buildings become
+ * ghost glass with cyan-lit windows, vegetation collapses to silhouettes,
+ * ground/roads go deep navy. Mutates the SHARED materials so tiles streamed
+ * while the scenario is active come in already themed; an exact snapshot
+ * restores the daylight look on exit. */
+export function setHoloLook(on: boolean): void {
+  const m = getMaterials();
+  if (on === !!holoSnaps) return;
+  if (!on) {
+    for (const [mat, s] of holoSnaps!) {
+      mat.color.setHex(s.color);
+      mat.emissive.setHex(s.emissive);
+      mat.emissiveIntensity = s.emissiveIntensity;
+      mat.opacity = s.opacity;
+      mat.transparent = s.transparent;
+      mat.depthWrite = s.depthWrite;
+      mat.needsUpdate = true;
+    }
+    holoSnaps = null;
+    return;
+  }
+
+  holoSnaps = new Map();
+  for (const mat of Object.values(m)) {
+    holoSnaps.set(mat, {
+      color: mat.color.getHex(),
+      emissive: mat.emissive.getHex(),
+      emissiveIntensity: mat.emissiveIntensity,
+      opacity: mat.opacity,
+      transparent: mat.transparent,
+      depthWrite: mat.depthWrite,
+    });
+  }
+  const tint = (mat: THREE.MeshStandardMaterial, color: number, emissive = 0) => {
+    mat.color.setHex(color);
+    mat.emissive.setHex(emissive);
+    mat.emissiveIntensity = emissive ? 1 : 0;
+    mat.needsUpdate = true;
+  };
+  // buildings: transparent ghost shells; the window emissive map glows cyan
+  for (const mat of [m.wall, m.wallPlain, m.roof]) {
+    mat.transparent = true;
+    mat.opacity = 0.22;
+    mat.depthWrite = false;
+    tint(mat, 0x9fd4ff, 0x123a5c);
+  }
+  m.wall.emissive.setHex(0x39c8ff); // windows (emissiveMap) burn cyan
+  m.wall.emissiveIntensity = 1.3;
+  // vegetation: dark silhouettes
+  tint(m.tree, 0x0c1a30, 0x04101f);
+  tint(m.grass, 0x121f38);
+  tint(m.forest, 0x0e1a30);
+  tint(m.sand, 0x14213a);
+  tint(m.zone, 0x101d33);
+  tint(m.parking, 0x101d33);
+  // circulation: navy asphalt, markings read as faint blue lines
+  tint(m.roadMajor, 0x455c8c);
+  tint(m.roadMinor, 0x455c8c);
+  tint(m.junction, 0x455c8c);
+  tint(m.path, 0x1c2c4c);
+  tint(m.sidewalk, 0x1b2a48);
+  tint(m.crosswalk, 0x66d9ff);
+  tint(m.barrier, 0x1b2c4a);
+  tint(m.pole, 0x233a5e);
+  tint(m.lampHead, 0x1b2c4a);
+  m.lampHead.emissiveIntensity = 0;
+  tint(m.water, 0x08283f, 0x02101c);
+  // agents: dim shells so the fibers carry the traffic story
+  tint(m.vehicle, 0x35507a, 0x0c2038);
+  tint(m.person, 0x2a3c5c);
+}
+
 export function getMaterials(): SharedMaterials {
   if (shared) return shared;
 

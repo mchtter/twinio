@@ -14,6 +14,8 @@ export class Environment {
   private lampTimer = 0;
   hour = 13;
   isNight = false;
+  private holo = false;
+  private shadowsPrev = true;
 
   constructor(
     private scene: THREE.Scene,
@@ -52,8 +54,40 @@ export class Environment {
     this.setHour(this.hour);
   }
 
+  /** Scenario lighting: dark navy void, cold blue wash, no sun/shadows/sky.
+   * The hour slider keeps recording but the look is frozen until exit. */
+  setHolo(on: boolean): void {
+    if (on === this.holo) return;
+    this.holo = on;
+    if (on) {
+      this.shadowsPrev = this.renderer.shadowMap.enabled;
+      this.renderer.shadowMap.enabled = false;
+      this.sky.visible = false;
+      this.scene.background = new THREE.Color(0x040914);
+      (this.scene.fog as THREE.Fog).color.set(0x040914);
+      this.sun.intensity = 0.9;
+      this.sun.color.set(0x6f8fff);
+      this.sun.castShadow = false;
+      this.hemi.intensity = 0.55;
+      this.hemi.color.set(0x3a63b0);
+      this.hemi.groundColor.set(0x101b33);
+      this.renderer.toneMappingExposure = 0.8;
+      this.isNight = false; // parks the street-lamp point-light pool
+      for (const pl of this.lampLights) pl.intensity = 0;
+    } else {
+      this.renderer.shadowMap.enabled = this.shadowsPrev;
+      this.sky.visible = true;
+      this.scene.background = null;
+      this.sun.color.set(0xffffff);
+      this.hemi.color.set(0xbdd3ea);
+      this.hemi.groundColor.set(0x4a4a40);
+      this.setHour(this.hour);
+    }
+  }
+
   setHour(hour: number): void {
     this.hour = hour;
+    if (this.holo) return; // recorded; applied when the scenario exits
     // sun elevation: day between ~06:00 and ~19:00
     const dayT = (hour - 6) / 13;
     const elev = Math.sin(Math.PI * dayT) * 62;

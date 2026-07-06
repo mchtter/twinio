@@ -13,6 +13,8 @@ import { PlayerControls } from './core/controls';
 import { Environment } from './core/environment';
 import { Hud } from './ui/hud';
 import { renderInspectorHtml } from './ui/inspector';
+import { TrafficFibers } from './scenario/trafficFlow';
+import { setHoloLook } from './world/materials';
 
 const params = new URLSearchParams(location.search);
 const startLat = parseFloat(params.get('lat') ?? '') || CONFIG.origin.lat;
@@ -58,6 +60,25 @@ const controls = new PlayerControls(camera, renderer.domElement, terrain.sample,
   collision.resolve(x, z, r),
 );
 
+// ---------- traffic-flow scenario (holographic city + live flow fibers) ----------
+const fibers = new TrafficFibers(scene);
+let scenarioOn = false;
+
+function setTrafficScenario(on: boolean): void {
+  if (on === scenarioOn) return;
+  scenarioOn = on;
+  setHoloLook(on);
+  env.setHolo(on);
+  terrain.setHolo(on);
+  fibers.setActive(on);
+  hud.showToast(
+    on
+      ? 'Trafik yoğunluğu senaryosu: fiber hızı = araç hızı, renk = akıcılık (camgöbeği→kırmızı)'
+      : 'Senaryo kapatıldı',
+    6000,
+  );
+}
+
 const hud = new Hud({
   onHourChange: (h) => env.setHour(h),
   onLayerToggle: (cat, visible) => {
@@ -78,6 +99,7 @@ const hud = new Hud({
     await teleport(hit.lat, hit.lon);
   },
   onLockRequest: () => controls.requestLock(),
+  onScenarioToggle: (on) => setTrafficScenario(on),
   onInspectorClose: () => {
     marker.visible = false;
   },
@@ -246,6 +268,7 @@ function loop(): void {
       (p, d) => world.pedCrossingAhead(p, d, (x, z, r) => pedestrians.anyNear(x, z, r)),
     );
     for (const s of world.signalSets()) s.update(simTime);
+    if (scenarioOn) fibers.update(dt, graph, (out) => vehicles.edgeFlows(out));
   }
   env.update(dt, camera.position, () => world.allLampHeads());
 
@@ -288,4 +311,9 @@ loop();
   inspect: (x: number, z: number) => world.features.query(x, z),
   // Faz 6 hook: live congestion feeds scale traffic here
   setTrafficDensity: (f: number) => vehicles.setDensity(f),
+  // scenario toggle from code (e2e + console); keeps the HUD button in sync
+  setScenario: (on: boolean) => {
+    document.getElementById('scenario-traffic')?.classList.toggle('on', on);
+    setTrafficScenario(on);
+  },
 };

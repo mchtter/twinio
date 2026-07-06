@@ -33,7 +33,8 @@
 - [x] Kavşak faz planları: sinyaller en yakın kavşağa bağlanır, karşılıklı kollar aynı fazda, dik kollar zıt yarım döngüde (çakışan yeşil imkânsız); kavşak başına deterministik kayma
 - [x] Yaya geçitlerine uyma: üzerinde yaya olan zebranın önünde araçlar durur (yaya konumları 8 m grid hash)
 - [x] Tam IDM araç takip modeli (tek fren yasası: önder araç / kırmızı ışık / dolu zebra) + şerit değiştirme (sol'dan sollama, sağa dönüş; `lanes` etiketi/genişlikten yön-başı şerit sayısı)
-- [ ] Yoğunluk ısı haritası katmanı, O-D matrisi ile talep üretimi
+- [x] Trafik yoğunluğu senaryo modu: holografik şehir (transparan binalar, silüet bitki örtüsü, lacivert zemin) + yol ağında canlı akış fiberleri — darbe hızı = ortalama araç hızı, renk = akıcılık (camgöbeği→kehribar→kırmızı), parlaklık = araç yoğunluğu
+- [ ] O-D matrisi ile talep üretimi
 
 ## Faz 3 — Akıllı kavşak sistemleri
 

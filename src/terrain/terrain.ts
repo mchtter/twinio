@@ -58,6 +58,18 @@ export class TerrainManager {
     scene.add(this.group);
   }
 
+  /** Scenario tint: press the ground into deep navy (color multiplies the
+   * vertex-colored texture). Masked tunnel-trench clones are tinted too; new
+   * clones copy the already-tinted base, so streaming stays consistent. */
+  setHolo(on: boolean): void {
+    const c = on ? 0x24375e : 0xffffff;
+    this.material.color.setHex(c);
+    for (const t of this.tiles.values()) {
+      const m = t.mesh.material as THREE.MeshStandardMaterial;
+      if (m !== this.material) m.color.setHex(c);
+    }
+  }
+
   reset(proj: GeoProjection): void {
     this.generation++;
     for (const t of this.tiles.values()) {
