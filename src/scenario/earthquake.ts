@@ -1,22 +1,93 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BuildingSpec, HeightSampler } from '../types';
 import { RoadGraph, GraphEdge } from '../agents/graph';
 import { World } from '../world/tileManager';
+import { hashStr, seededRandom } from '../world/geomUtils';
 
 /** Earthquake scenario: camera shake + procedural rumble, then staggered
- * building collapses around the viewpoint. Victim selection uses the OSM
- * `start_date` tag when present (buildings ≥15 years old collapse far more
- * often); untagged buildings — the common case — fall randomly. Collapsing
- * buildings leave rubble piles; buildings next to a street can spill rubble
- * onto the carriageway, severing that edge of the vehicle graph (cars vanish
- * from the blocked segment and route around it). Exiting the scenario restores
- * the skyline, the graph and the silence exactly as they were. */
+ * building collapses around the viewpoint. Every scanned building wears a
+ * translucent risk shell tinted blue → green → yellow → orange → red by a
+ * deterministic score: OSM `start_date` age when present, plus a mid-rise
+ * bump and per-id noise for the untagged majority. Collapse odds follow the
+ * same score, so the red buildings fall far more often than the blue ones;
+ * fallen buildings keep their shell as a faint silhouette standing over the
+ * fully opaque rubble. Rubble next to a street can spill onto the
+ * carriageway, severing that edge of the vehicle graph (cars vanish from the
+ * blocked segment and route around it). Exiting the scenario restores the
+ * skyline, the graph and the silence exactly as they were. */
 
 const VICTIM_RADIUS = 420; // around the LOOKED-AT ground point, not the camera
 const MAX_VICTIMS = 90;
 const MIN_VICTIMS = 12; // the scenario must never play out empty
 const FALL_DURATION = 2.4;
 const SHAKE_END = 9;
+const GHOST_ALPHA = 0.1; // fallen buildings linger as faint silhouettes
+const SHELL_GROW = 0.35; // shell inflation so it never z-fights real facades
+
+/** Risk bands, lowest → highest. Shell tint and HUD legend share these. */
+export const RISK_BANDS = [
+  { css: '#3d7bfd', label: 'çok düşük' },
+  { css: '#35b96a', label: 'düşük' },
+  { css: '#efc93f', label: 'orta' },
+  { css: '#f2892e', label: 'yüksek' },
+  { css: '#e5484d', label: 'çok yüksek' },
+].map((b) => ({ ...b, color: new THREE.Color(b.css) }));
+
+const bandOf = (risk: number): number => Math.min(4, Math.floor(risk * 5));
+
+/** Deterministic 0..1 risk per building. Age (start_date) is the strongest
+ * signal; mid-rise stock gets a soft-story bump; untagged buildings spread
+ * over the middle bands with per-id noise, so re-runs paint the same city. */
+function riskScore(spec: BuildingSpec, yrNow: number): number {
+  const rng = seededRandom(hashStr(spec.id));
+  const yr = parseInt(spec.tags?.['start_date'] ?? spec.tags?.['construction_date'] ?? '', 10);
+  let risk: number;
+  if (isFinite(yr) && yr <= yrNow) {
+    // ~10 yrs → low, ~30 yrs → mid, 50+ yrs → high
+    risk = Math.min(0.9, Math.max(0.06, (yrNow - yr - 4) / 55));
+  } else {
+    // untagged (the Turkish OSM norm): spread across ALL five bands so the
+    // painted city reads as a real risk map, biased toward the middle
+    const u = rng();
+    risk = 0.5 + (u - 0.5) * (0.7 + 0.9 * Math.abs(u - 0.5));
+  }
+  if (spec.height >= 12 && spec.height <= 28) risk += 0.07; // mid-rise: soft-story risk
+  else if (spec.height > 45) risk -= 0.05; // modern high-rise: recent seismic code
+  risk += (rng() - 0.5) * 0.1;
+  return Math.min(0.97, Math.max(0.03, risk));
+}
+
+/** Slightly inflated extruded hull of a footprint — the risk tint volume.
+ * Inflation + a sunk base keep it clear of the real facades on any slope. */
+function buildShellGeometry(
+  spec: BuildingSpec,
+  cx: number,
+  cz: number,
+  sample: HeightSampler,
+): THREE.BufferGeometry | null {
+  const pts: THREE.Vector2[] = [];
+  for (const p of spec.outer) {
+    const dx = p.x - cx;
+    const dz = p.z - cz;
+    const l = Math.hypot(dx, dz) || 1;
+    const s = (l + SHELL_GROW) / l;
+    pts.push(new THREE.Vector2(dx * s, -dz * s));
+  }
+  try {
+    const geo = new THREE.ExtrudeGeometry(new THREE.Shape(pts), {
+      depth: spec.height + (spec.roofHeight ?? 0) + SHELL_GROW,
+      bevelEnabled: false,
+    });
+    geo.rotateX(-Math.PI / 2); // extrude axis → up
+    geo.deleteAttribute('normal');
+    geo.deleteAttribute('uv');
+    geo.translate(cx, sample(cx, cz) - 0.8, cz);
+    return geo;
+  } catch {
+    return null; // degenerate footprint
+  }
+}
 
 interface Victim {
   key: string;
@@ -34,6 +105,9 @@ interface Victim {
   done: boolean;
   blockEdgeId: number | null;
   blockPt: THREE.Vector3 | null;
+  band: number;
+  shellStart: number; // vertex range in the merged risk-shell geometry
+  shellCount: number;
 }
 
 export class EarthquakeScenario {
@@ -47,9 +121,16 @@ export class EarthquakeScenario {
   private affectedTiles = new Map<string, Set<string>>();
   private concrete = new THREE.MeshStandardMaterial({ color: 0x9a948a, roughness: 0.95 });
   private rubbleMat = new THREE.MeshStandardMaterial({ color: 0x847e73, roughness: 1 });
+  private shell: THREE.Mesh | null = null;
+  // fog/toneMapping OFF: this is a data overlay — fogged shells fade to the
+  // gray fog color at city-overview distances (alpha survives, hue doesn't),
+  // washing the whole risk map to a uniform gray film
+  private shellMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, depthWrite: false, fog: false, toneMapped: false,
+  });
   private audioCtx: AudioContext | null = null;
   private graph: RoadGraph | null = null;
-  private stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0 };
+  private stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0, bands: [0, 0, 0, 0, 0] };
 
   constructor(scene: THREE.Scene) {
     this.group.visible = false;
@@ -63,7 +144,7 @@ export class EarthquakeScenario {
     this.graph = graph;
     this.group.visible = true;
     this.startRumble();
-    this.stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0 };
+    this.stats = { scanned: 0, dated: 0, byAge: 0, byChance: 0, bands: [0, 0, 0, 0, 0] };
 
     // ---- candidates around the looked-at ground point ----
     const yrNow = new Date().getFullYear();
@@ -74,9 +155,10 @@ export class EarthquakeScenario {
       cz: number;
       d: number;
       old: boolean | null; // start_date verdict; null = untagged
+      risk: number; // deterministic 0..1 — drives both the tint and the odds
+      band: number;
     }
-    const picked: Cand[] = [];
-    const spared: Cand[] = [];
+    const cands: Cand[] = [];
     for (const { key, spec } of world.features.allBuildings()) {
       if (spec.outer.length < 3) continue;
       let cx = 0;
@@ -93,12 +175,21 @@ export class EarthquakeScenario {
       const yr = parseInt(spec.tags?.['start_date'] ?? spec.tags?.['construction_date'] ?? '', 10);
       const old = isFinite(yr) ? yrNow - yr >= 15 : null;
       if (old !== null) this.stats.dated++;
-      const chance = old === true ? 0.6 : old === false ? 0.04 : 0.28;
-      (Math.random() < chance ? picked : spared).push({ key, spec, cx, cz, d, old });
+      const risk = riskScore(spec, yrNow);
+      const band = bandOf(risk);
+      this.stats.bands[band]++;
+      cands.push({ key, spec, cx, cz, d, old, risk, band });
     }
-    // the scenario must read as a quake: top up with the nearest spared ones
+    // collapse odds follow the painted risk, so tint and outcome tell one
+    // story: red ~0.6+, the untagged middle ~0.1–0.35, blue ~0.01
+    const picked: Cand[] = [];
+    const spared: Cand[] = [];
+    for (const c of cands) {
+      (Math.random() < Math.min(0.85, c.risk * c.risk * 1.05) ? picked : spared).push(c);
+    }
+    // the scenario must read as a quake: top up with near AND risky spared ones
     if (picked.length < MIN_VICTIMS && spared.length > 0) {
-      spared.sort((a, b) => a.d - b.d);
+      spared.sort((a, b) => a.d - a.risk * 260 - (b.d - b.risk * 260));
       picked.push(...spared.slice(0, MIN_VICTIMS - picked.length));
     }
     picked.sort((a, b) => a.d - b.d);
@@ -141,6 +232,9 @@ export class EarthquakeScenario {
         done: false,
         blockEdgeId,
         blockPt,
+        band: c.band,
+        shellStart: 0,
+        shellCount: 0,
       });
       let set = this.affectedTiles.get(key);
       if (!set) {
@@ -152,6 +246,39 @@ export class EarthquakeScenario {
 
     // swap victims out of the merged tile meshes — the animated prisms take over
     for (const [key, ids] of this.affectedTiles) world.setCollapsedBuildings(key, ids);
+
+    // ---- risk shells: every scanned building gets a tinted translucent hull;
+    // riskier reads more solid. Victims keep theirs after the fall as a faint
+    // silhouette (band colour at GHOST_ALPHA) over the fully opaque rubble ----
+    const victimById = new Map(this.victims.map((v) => [v.spec.id, v]));
+    const shellGeos: THREE.BufferGeometry[] = [];
+    const shellCols: number[] = [];
+    let vtx = 0;
+    for (const c of cands) {
+      const geo = buildShellGeometry(c.spec, c.cx, c.cz, sample);
+      if (!geo) continue;
+      const n = geo.getAttribute('position').count;
+      const col = RISK_BANDS[c.band].color;
+      const alpha = 0.26 + 0.32 * c.risk;
+      for (let i = 0; i < n; i++) shellCols.push(col.r, col.g, col.b, alpha);
+      const v = victimById.get(c.spec.id);
+      if (v) {
+        v.shellStart = vtx;
+        v.shellCount = n;
+      }
+      vtx += n;
+      shellGeos.push(geo);
+    }
+    if (shellGeos.length > 0) {
+      const merged = mergeGeometries(shellGeos, false);
+      for (const g of shellGeos) g.dispose();
+      if (merged) {
+        merged.setAttribute('color', new THREE.Float32BufferAttribute(shellCols, 4));
+        this.shell = new THREE.Mesh(merged, this.shellMat);
+        this.shell.renderOrder = 10; // after the water/crosswalk decals
+        this.group.add(this.shell);
+      }
+    }
 
     // rubble pool: piles (8 boxes) + street spills (3 boxes), placed as falls complete
     const cap = this.victims.length * 11;
@@ -177,6 +304,7 @@ export class EarthquakeScenario {
         v.done = true;
         v.mesh.visible = false;
         this.spawnRubble(v);
+        this.ghostShell(v);
         if (v.blockEdgeId !== null && this.graph) {
           const e = this.graph.removeEdge(v.blockEdgeId);
           if (e) this.removedEdges.push(e);
@@ -219,6 +347,8 @@ export class EarthquakeScenario {
     byChance: number;
     blockedEdges: number;
     blockedMeters: number;
+    /** standing stock per risk band, lowest → highest (RISK_BANDS order) */
+    bands: number[];
   } {
     return {
       active: this.active,
@@ -232,11 +362,21 @@ export class EarthquakeScenario {
       byChance: this.stats.byChance,
       blockedEdges: this.removedEdges.length,
       blockedMeters: this.removedEdges.reduce((s, e) => s + e.len, 0),
+      bands: [...this.stats.bands],
     };
   }
 
+  /** Fallen building: its shell fades to a see-through silhouette. */
+  private ghostShell(v: Victim): void {
+    if (!this.shell || v.shellCount === 0) return;
+    const attr = this.shell.geometry.getAttribute('color') as THREE.BufferAttribute;
+    const arr = attr.array as Float32Array;
+    for (let i = v.shellStart; i < v.shellStart + v.shellCount; i++) arr[i * 4 + 3] = GHOST_ALPHA;
+    attr.needsUpdate = true;
+  }
+
   private stopInternal(world: World, graph: RoadGraph): void {
-    if (!this.active && this.victims.length === 0) return;
+    if (!this.active && this.victims.length === 0 && !this.shell) return;
     this.active = false;
     for (const [key] of this.affectedTiles) world.setCollapsedBuildings(key, new Set());
     this.affectedTiles.clear();
@@ -245,6 +385,11 @@ export class EarthquakeScenario {
       v.mesh.geometry.dispose();
     }
     this.victims = [];
+    if (this.shell) {
+      this.group.remove(this.shell);
+      this.shell.geometry.dispose();
+      this.shell = null;
+    }
     if (this.rubble) {
       this.group.remove(this.rubble);
       this.rubble.geometry.dispose();

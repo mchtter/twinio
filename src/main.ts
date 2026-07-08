@@ -15,7 +15,7 @@ import { Hud } from './ui/hud';
 import { renderInspectorHtml } from './ui/inspector';
 import { TrafficFibers } from './scenario/trafficFlow';
 import { InfraLayer } from './scenario/infrastructure';
-import { EarthquakeScenario } from './scenario/earthquake';
+import { EarthquakeScenario, RISK_BANDS } from './scenario/earthquake';
 import { setHoloLook } from './world/materials';
 import type { ScenarioName } from './ui/hud';
 
@@ -72,7 +72,7 @@ let activeScenario: ScenarioName | null = null;
 const SCENARIO_TOASTS: Record<ScenarioName, string> = {
   traffic: 'Trafik yoğunluğu: fiber hızı = araç hızı, renk = akıcılık (camgöbeği→kırmızı)',
   infra: 'Altyapı: su (mavi) + kanalizasyon (yeşil, yokuş aşağı) cadde ağından türetilmiş TAHMİNİ şebeke; pipeline/rögar/hidrant gerçek OSM verisi',
-  quake: 'Deprem senaryosu: start_date etiketi varsa ≥15 yaş kuralı, yoksa rastgele çökme; enkaz yolları kapatabilir. Çıkınca şehir eski haline döner',
+  quake: 'Deprem senaryosu: binalar risk durumuna göre boyanır (mavi=çok düşük → kırmızı=çok yüksek; start_date varsa yaş belirler). Riskli binalar daha sık çöker; yıkılanlar soluk silüet bırakır, enkaz yolları kapatabilir. Çıkınca şehir eski haline döner',
 };
 
 function setScenario(name: ScenarioName | null): void {
@@ -108,13 +108,25 @@ function lookFocus(): THREE.Vector3 {
 function quakeReportHtml(): string {
   const r = quake.report();
   const pct = r.scanned > 0 ? Math.round((r.victims / r.scanned) * 100) : 0;
+  // legend runs highest → lowest risk, matching the "danger first" reading
+  const legend = [...RISK_BANDS.keys()]
+    .reverse()
+    .map(
+      (i) =>
+        `<span style="white-space:nowrap" title="${RISK_BANDS[i].label}">` +
+        `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;` +
+        `background:${RISK_BANDS[i].css};margin:0 3px 0 7px"></span>${r.bands[i]}</span>`,
+    )
+    .join('');
   return (
     `<div>Sarsıntı: <b>${r.shaking ? 'sürüyor' : 'bitti'}</b></div>` +
     `<div>Taranan bina: <b>${r.scanned}</b> <span class="dim">(yapım yılı verili: ${r.dated})</span></div>` +
+    `<div>Risk dağılımı:${legend}</div>` +
+    `<div class="dim">kırmızı=çok yüksek → mavi=çok düşük · yıkılan soluk silüet kalır</div>` +
     `<div>Yıkılan: <b>${r.fallen}/${r.victims}</b> <span class="dim">(%${pct} — yaş kuralı ${r.byAge} · rastgele ${r.byChance})</span></div>` +
     `<div>Kapanan yol: <b>${r.blockedEdges} kesim</b> <span class="dim">· ~${Math.round(r.blockedMeters)} m</span></div>` +
     (r.dated === 0
-      ? `<div class="dim" style="margin-top:4px">Bu bölgede OSM'de yapım yılı (start_date) verisi yok — çökme rastgele seçildi</div>`
+      ? `<div class="dim" style="margin-top:4px">Bu bölgede OSM'de yapım yılı (start_date) verisi yok — risk, yükseklik + kararlı gürültüyle tahmin edildi</div>`
       : '')
   );
 }
@@ -360,6 +372,8 @@ loop();
   // Faz 6 hook: live congestion feeds scale traffic here
   setTrafficDensity: (f: number) => vehicles.setDensity(f),
   quakeDebug: () => quake.report(),
+  // raw scenario object (e2e probes poke at private fields at runtime)
+  quakeObj: () => quake,
   // scenario switch from code (e2e + console); keeps the HUD buttons in sync
   setScenario: (name: ScenarioName | boolean | null) => {
     const n = name === true ? 'traffic' : name === false ? null : name;
